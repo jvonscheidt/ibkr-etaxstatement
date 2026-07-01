@@ -1,0 +1,16 @@
+# XSD validation
+lxml>=4.9
+
+# Barcode PDF generation (eCH-0270)
+# pdf417gen (vroonhof fork) provides encode_macro() (Macro PDF417 with
+# force_binary/segment_size/force_rows/file_id support) and render_image().
+pdf417gen @ git+https://github.com/vroonhof/pdf417-py.git
+reportlab>=4.0
+Pillow>=10.0
+python-barcode>=0.15
+# pypdf: post-processes the reportlab-generated PDF to set /Rotate on each
+# page without reportlab's setPageRotation() also swapping the MediaBox.
+pypdf>=4.0
+
+# Test suite
+pytest>=7.0

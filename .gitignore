@@ -1,0 +1,29 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Generated outputs
+output.xml
+output_barcode.pdf
+*.pdf417
+
+# Debug/scratch artifacts from barcode work
+/*.png
+seg_*.png
+page_raster.png
+
+# Specs, XSD, and reference SDK bundles are not redistributed — download the
+# eCH-0196/eCH-0270 specs + XSD from ech.ch into a local (ignored) documentation/.
+documentation/
+
+# Real reference eSteuerauszug used only as a local decode fixture.
+# Contains a real institution's/person's data — keep out of version control.
+data/example_etax.pdf
+
+# Virtual environments
+.venv/
+venv/
+
+# Throwaway diagnostic test artifacts
+test_*.pdf
+test_*.xml
