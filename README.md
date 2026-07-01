@@ -1,4 +1,4 @@
-# ibkr-tax
+# ibkr-etaxstatement (eSteuerauszug / eRelevé fiscal)
 
 Convert an **Interactive Brokers (IBKR) FlexQuery XML export** into a Swiss
 **eCH-0196 E-Steuerauszug** — both as validated XML and as an **eCH-0270 barcode
