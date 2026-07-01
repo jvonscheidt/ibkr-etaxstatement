@@ -260,8 +260,6 @@ def _draw_barcode_page(c: canvas.Canvas, page_w_cm: float, page_h_cm: float,
     transform here maps our existing "logical landscape" coordinate math onto
     the portrait page, so everything below is otherwise unchanged.
     """
-    n = len(images)
-
     # Right-align: if fewer than 6, treat as if the left positions are empty
     # Segment positions 0..5 left to right; use the last n positions
     slot_w_cm = _BC_ROT_W_CM + _GAP_CM
