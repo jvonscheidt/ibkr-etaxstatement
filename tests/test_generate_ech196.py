@@ -6,7 +6,6 @@ from datetime import date
 
 import pytest
 
-from src import generate_ech196 as gen
 from src.generate_ech196 import (
     NS,
     YEAR_END,
