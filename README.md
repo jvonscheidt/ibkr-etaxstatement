@@ -100,10 +100,3 @@ python -m pytest
 The suite covers parsing, FX→CHF conversion, eCH-0196 generation, an end-to-end
 XSD validation, and barcode round-trip/structure (the barcode tests self-skip if
 their optional decode dependencies are absent).
-
-## License
-
-This program is free software: you can redistribute it and/or modify it under the
-terms of the **GNU General Public License v3.0** as published by the Free
-Software Foundation. It is distributed WITHOUT ANY WARRANTY. See
-[LICENSE](LICENSE) for the full text.
