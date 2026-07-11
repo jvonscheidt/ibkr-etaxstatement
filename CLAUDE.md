@@ -42,7 +42,7 @@ The full technical specifications are published by Verein eCH (not redistributed
 Consult them for schema details, field definitions, and validation rules before generating output.
 
 The output must cover:
-- Security holdings (open positions) with valuation as of 31.12.2025
+- Security holdings (open positions) with valuation as of Dec 31st
 - Dividend and interest income per position
 - FX conversion to CHF where positions are denominated in EUR or USD
 - **DA-1 reclaim data**: foreign withholding tax (Verrechnungssteuer) deducted at source on dividends from non-Swiss securities, which Swiss residents can reclaim via the DA-1 annex to the tax declaration
