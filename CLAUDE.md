@@ -116,3 +116,15 @@ Year-end (31.12.2025) rates from the file: CHF→EUR = 1.074, USD→EUR = 0.8513
 - `grossRevenueA` = Swiss-source income (35% Swiss WHT); `grossRevenueB` = foreign-source income (DA-1)
 - All ETFs in this account are accumulating (ACC) — mapped to `securityCategory="FUND"`, `securityType="FUND.ACCUMULATION"`. `securityType` (FUND.ACCUMULATION/DISTRIBUTION) is only set for `FUND`-category positions; it's omitted for `SHARE` positions since eCH-196 uses a separate `SHARE.*` enumeration for those.
 - `listOfLiabilities`/`liabilityAccount`/`payment`: "Broker Interest Paid" (margin/debit interest) is reported here as deductible debt interest (Schuldzinsen), with its own `totalGrossRevenueB` (expense-side) that is **not** folded into the document's root `totalGrossRevenueB` (income-only). No year-end debt balance is available from the FlexQuery export, so `taxValue` is omitted (optional per XSD).
+
+## Git & GitHub
+
+- Default branch is `main`; minor changes commit to it directly. Major changes get branched:
+  `feat/<topic>`, `fix/<topic>`, `chore/<topic>`.
+- Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`,
+  `chore:`. Imperative subject ≤ 72 chars; body explains *why*, not *what*.
+- One logical change per commit; run the lint/format/test before.
+- Update branches with `git pull --rebase`; never force-push a shared branch.
+- Use the `gh` CLI for GitHub work (`gh pr create`, `gh issue view`, …). Keep
+  PRs small and single-purpose; CI must be green before merge.
+- Update the README before tagging a new version.
