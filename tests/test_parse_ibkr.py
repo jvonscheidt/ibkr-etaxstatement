@@ -101,6 +101,10 @@ class TestParseRealFile:
         assert parsed.fx_rates[(date(2025, 12, 31), "CHF", "EUR")] == pytest.approx(1.074)
         assert parsed.fx_rates[(date(2025, 12, 31), "USD", "EUR")] == pytest.approx(0.85135)
 
+    def test_statement_period_is_parsed(self, parsed):
+        assert parsed.period_from == date(2025, 1, 1)
+        assert parsed.period_to == date(2025, 12, 31)
+
 
 def test_positions_exclude_non_summary_and_non_year_end(tmp_path):
     xml = """<FlexQueryResponse><FlexStatements><FlexStatement>

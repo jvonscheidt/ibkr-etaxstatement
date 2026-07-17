@@ -65,6 +65,9 @@ class CashTransaction:
     description: str
     isin: str                # empty for cash interest/WHT
     symbol: str
+    asset_category: str = ""
+    sub_category: str = ""
+    issuer_country_code: str = ""
 
 
 @dataclass
@@ -75,6 +78,8 @@ class IBKRData:
     # (report_date, from_currency, to_currency) → rate
     # All rates are X → EUR (base currency)
     fx_rates: dict[tuple[date, str, str], float]
+    period_from: Optional[date] = None
+    period_to: Optional[date] = None
 
 
 def _parse_account(elem) -> AccountInfo:
@@ -101,13 +106,17 @@ def _parse_account(elem) -> AccountInfo:
     )
 
 
-def _parse_positions(stmt) -> list[OpenPosition]:
+def _parse_positions(stmt, period_to: Optional[date] = None) -> list[OpenPosition]:
     positions = []
     for op in stmt.findall("OpenPositions/OpenPosition"):
         if op.get("levelOfDetail") != "SUMMARY":
             continue
         report_date = _date(op.get("reportDate", ""))
-        if report_date is None or report_date.month != 12 or report_date.day != 31:
+        if report_date is None:
+            continue
+        if period_to is not None and report_date != period_to:
+            continue
+        if period_to is None and (report_date.month != 12 or report_date.day != 31):
             continue
         isin = op.get("isin", "")
         if not isin:
@@ -153,6 +162,9 @@ def _parse_cash_transactions(stmt) -> list[CashTransaction]:
             description=ct.get("description", ""),
             isin=ct.get("isin", ""),
             symbol=ct.get("symbol", ""),
+            asset_category=ct.get("assetCategory", ""),
+            sub_category=ct.get("subCategory", ""),
+            issuer_country_code=ct.get("issuerCountryCode", ""),
         ))
     return txs
 
@@ -176,9 +188,14 @@ def parse(xml_path: str) -> IBKRData:
     if stmt is None:
         raise ValueError("No FlexStatement found in XML")
 
+    period_from = _date(stmt.get("fromDate", ""))
+    period_to = _date(stmt.get("toDate", ""))
+
     return IBKRData(
         account=_parse_account(stmt.find("AccountInformation")),
-        positions=_parse_positions(stmt),
+        positions=_parse_positions(stmt, period_to),
         cash_transactions=_parse_cash_transactions(stmt),
         fx_rates=_parse_fx_rates(stmt),
+        period_from=period_from,
+        period_to=period_to,
     )

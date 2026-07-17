@@ -26,9 +26,6 @@ SCHEMA_LOCATION = (
 )
 MINOR_VERSION = "22"
 
-YEAR_END = date(2025, 12, 31)
-TAX_PERIOD = "2025"
-
 # Interactive Brokers' clearing number, used in the eCH-196 document id and
 # the eCH-0270 barcode's Code 128 payload (imported by generate_barcode_pdf).
 IBKR_CLEARING_NUMBER = "89095"
@@ -87,6 +84,15 @@ def _security_category(pos: OpenPosition) -> str:
     return "SHARE"
 
 
+def _transaction_security_category(tx: CashTransaction) -> str:
+    """Map the limited metadata available for a closed security."""
+    if tx.sub_category == "ETF":
+        return "FUND"
+    if tx.asset_category == "STK":
+        return "SHARE"
+    return "OTHER"
+
+
 _ACC_TOKENS = re.compile(r"\b(?:ACC|1C|ACCUM\w*)\b")
 _DIST_TOKENS = re.compile(r"\b(?:DIST\w*|INC|INCOME)\b")
 
@@ -113,7 +119,30 @@ def _security_type(pos: OpenPosition) -> str | None:
     return "FUND.ACCUMULATION"
 
 
-def _build_securities(data: IBKRData) -> tuple[ET.Element, float, float, float]:
+def _statement_period(data: IBKRData) -> tuple[date, date]:
+    """Return the full calendar-year period represented by the export."""
+    period_to = data.period_to
+    if period_to is None and data.positions:
+        period_to = max(pos.report_date for pos in data.positions)
+    if period_to is None and data.cash_transactions:
+        period_to = date(max(tx.settle_date.year for tx in data.cash_transactions), 12, 31)
+    if period_to is None:
+        raise ValueError("Cannot determine tax period from the IBKR export")
+
+    period_from = data.period_from or date(period_to.year, 1, 1)
+    expected_from = date(period_to.year, 1, 1)
+    expected_to = date(period_to.year, 12, 31)
+    if period_from != expected_from or period_to != expected_to:
+        raise ValueError(
+            "IBKR export must cover one full calendar year "
+            f"({expected_from.isoformat()} through {expected_to.isoformat()})"
+        )
+    return period_from, period_to
+
+
+def _build_securities(
+    data: IBKRData, year_end: date
+) -> tuple[ET.Element, float, float, float]:
     """Build <listOfSecurities>.
 
     Returns (element, total_tax_value_chf, total_gross_revenue_b_chf,
@@ -138,7 +167,7 @@ def _build_securities(data: IBKRData) -> tuple[ET.Element, float, float, float]:
     total_rev_b = 0.0
     total_wht = 0.0
     for idx, pos in enumerate(data.positions, start=1):
-        rate = _fx_to_chf(pos.currency, YEAR_END, data.fx_rates)
+        rate = _fx_to_chf(pos.currency, year_end, data.fx_rates)
         chf_value = round(pos.position_value * rate, 2)
         total_chf += chf_value
 
@@ -158,7 +187,7 @@ def _build_securities(data: IBKRData) -> tuple[ET.Element, float, float, float]:
         sec_el = ET.SubElement(depot_el, _q("security"), **sec_attrs)
 
         ET.SubElement(sec_el, _q("taxValue"), **{
-            "referenceDate": YEAR_END.isoformat(),
+            "referenceDate": year_end.isoformat(),
             "quotationType": "PIECE",
             "quantity": _chf(pos.quantity),
             "balanceCurrency": pos.currency,
@@ -173,6 +202,37 @@ def _build_securities(data: IBKRData) -> tuple[ET.Element, float, float, float]:
         wht_txs = wht_by_isin.get(pos.isin, [])
         rev_b, wht = _build_security_payments(
             sec_el, income_txs, wht_txs, data.fx_rates, pos.quantity
+        )
+        total_rev_b += rev_b
+        total_wht += wht
+
+    # A security sold during the year is absent from OpenPositions but its
+    # dividend and withholding-tax entries still belong in the annual return.
+    open_isins = {pos.isin for pos in data.positions}
+    orphan_isins = sorted((set(income_by_isin) | set(wht_by_isin)) - open_isins)
+    for offset, isin in enumerate(orphan_isins, start=len(data.positions) + 1):
+        income_txs = income_by_isin.get(isin, [])
+        wht_txs = wht_by_isin.get(isin, [])
+        txs = income_txs or wht_txs
+        representative = txs[0]
+        country = representative.issuer_country_code
+        if not country:
+            country = isin[:2] if len(isin) >= 2 and isin[:2].isalpha() else "XX"
+        category = _transaction_security_category(representative)
+        sec_attrs = {
+            "positionId": str(offset),
+            "country": country.upper(),
+            "currency": representative.currency,
+            "quotationType": "PIECE",
+            "securityCategory": category,
+            "securityName": (representative.symbol or isin)[:60],
+            "isin": isin,
+        }
+        if category == "FUND":
+            sec_attrs["securityType"] = "FUND.DISTRIBUTION"
+        sec_el = ET.SubElement(depot_el, _q("security"), **sec_attrs)
+        rev_b, wht = _build_security_payments(
+            sec_el, income_txs, wht_txs, data.fx_rates, quantity=0.0
         )
         total_rev_b += rev_b
         total_wht += wht
@@ -415,12 +475,15 @@ def build(data: IBKRData, eur_chf_override: float | None = None) -> ET.Element:
         eur_chf_override: If provided, overrides the IBKR embedded EUR→CHF rate
                           for all year-end valuations (e.g. ESTV official rate).
     """
-    if eur_chf_override is not None:
-        # Inject a synthetic CHF→EUR rate for YEAR_END to override IBKR's
-        chf_eur = 1.0 / eur_chf_override
-        data.fx_rates[(YEAR_END, "CHF", "EUR")] = chf_eur
+    period_from, year_end = _statement_period(data)
+    tax_period = str(year_end.year)
 
-    sec_list, total_tax_value, sec_rev_b, sec_wht = _build_securities(data)
+    if eur_chf_override is not None:
+        # Inject a synthetic CHF→EUR rate for the statement year-end.
+        chf_eur = 1.0 / eur_chf_override
+        data.fx_rates[(year_end, "CHF", "EUR")] = chf_eur
+
+    sec_list, total_tax_value, sec_rev_b, sec_wht = _build_securities(data, year_end)
     ba_list, ba_rev_b, ba_wht, _ = _build_bank_accounts(data)
     li_list = _build_liabilities(data)
 
@@ -437,14 +500,14 @@ def build(data: IBKRData, eur_chf_override: float | None = None) -> ET.Element:
     # (data/example_etax.pdf), whose customer-number field is only 12 digits,
     # not the 14 implied by a literal reading of the BEIL2 spec text.
     acct_padded = data.account.account_id.rjust(14, "0")
-    doc_id = f"CH{IBKR_CLEARING_NUMBER}01{acct_padded}{YEAR_END.strftime('%Y%m%d')}01"
+    doc_id = f"CH{IBKR_CLEARING_NUMBER}01{acct_padded}{year_end.strftime('%Y%m%d')}01"
 
     root_attrs = {
         "id": doc_id,
         "creationDate": creation_dt,
-        "taxPeriod": TAX_PERIOD,
-        "periodFrom": f"{TAX_PERIOD}-01-01",
-        "periodTo": f"{TAX_PERIOD}-12-31",
+        "taxPeriod": tax_period,
+        "periodFrom": period_from.isoformat(),
+        "periodTo": year_end.isoformat(),
         "country": "CH",
         "canton": canton,
         "totalTaxValue": _chf(total_tax_value),

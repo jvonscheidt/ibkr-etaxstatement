@@ -11,7 +11,9 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from src.parse_ibkr import CashTransaction, parse
-from src.generate_ech196 import NS, _build_security_payments
+from src.generate_ech196 import NS, _build_security_payments, serialize
+
+from .conftest import XSD_PATH
 
 
 def _q(tag: str) -> str:
@@ -47,20 +49,21 @@ def test_dividend_wht_aggregates_into_root_totals(tmp_path):
     # foreign WHT must appear in the security payment AND in the root totals.
     from datetime import date as _date
     from src.parse_ibkr import AccountInfo, CashTransaction as CT, IBKRData, OpenPosition
-    from src.generate_ech196 import build, YEAR_END
+    from src.generate_ech196 import build
 
     isin = "IE00DIST0001"
     pos = OpenPosition(
         isin=isin, symbol="VWRD", description="VANGUARD FTSE ALL-WORLD DIST",
         currency="USD", fx_rate_to_base=0.85, quantity=10, mark_price=100,
-        position_value=1000, issuer_country_code="IE", report_date=YEAR_END,
+        position_value=1000, issuer_country_code="IE",
+        report_date=_date(2025, 12, 31),
         sub_category="ETF",
     )
     div = CT(_date(2025, 6, 15), "USD", 0.85, 40.0, "Dividends", "Q2 dividend", isin, "VWRD")
     wht = CT(_date(2025, 6, 15), "USD", 0.85, -6.0, "Withholding Tax", "US WHT", isin, "VWRD")
     fx = {
-        (YEAR_END, "CHF", "EUR"): 1.074,
-        (YEAR_END, "USD", "EUR"): 0.85135,
+        (_date(2025, 12, 31), "CHF", "EUR"): 1.074,
+        (_date(2025, 12, 31), "USD", "EUR"): 0.85135,
         (_date(2025, 6, 15), "CHF", "EUR"): 1.07,
         (_date(2025, 6, 15), "USD", "EUR"): 0.86,
     }
@@ -89,3 +92,53 @@ def test_dividends_are_parsed(tmp_path):
     f.write_text(xml, encoding="utf-8")
     parsed = parse(str(f))
     assert any(t.tx_type == "Dividends" for t in parsed.cash_transactions)
+
+
+def test_income_from_security_sold_before_year_end_is_reported():
+    from src.generate_ech196 import build
+    from src.parse_ibkr import AccountInfo, IBKRData
+
+    isin = "US0378331005"
+    pay_date = date(2025, 5, 15)
+    dividend = CashTransaction(
+        pay_date, "USD", 0.85, 10.0, "Dividends",
+        "AAPL CASH DIVIDEND", isin, "AAPL",
+    )
+    withholding = CashTransaction(
+        pay_date, "USD", 0.85, -1.5, "Withholding Tax",
+        "AAPL US TAX", isin, "AAPL",
+    )
+    data = IBKRData(
+        AccountInfo("U1", "A B", "A", "B", "ZH", "EUR", "IB-UK"),
+        [],
+        [dividend, withholding],
+        {
+            (pay_date, "CHF", "EUR"): 1.07,
+            (pay_date, "USD", "EUR"): 0.85,
+        },
+        period_from=date(2025, 1, 1),
+        period_to=date(2025, 12, 31),
+    )
+
+    root = build(data)
+
+    security = root.find(
+        f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}"
+    )
+    assert security is not None
+    assert security.get("isin") == isin
+    assert security.find(_q("taxValue")) is None
+    payment = security.find(_q("payment"))
+    assert float(payment.get("grossRevenueB")) > 0
+    assert float(payment.get("withHoldingTaxClaim")) > 0
+    securities = root.find(_q("listOfSecurities"))
+    assert root.get("totalGrossRevenueB") == securities.get("totalGrossRevenueB")
+    assert root.get("totalWithHoldingTaxClaim") == securities.get(
+        "totalWithHoldingTaxClaim"
+    )
+
+    if XSD_PATH.exists():
+        lxml_etree = pytest.importorskip("lxml.etree")
+        schema = lxml_etree.XMLSchema(lxml_etree.parse(str(XSD_PATH)))
+        document = lxml_etree.fromstring(serialize(root).encode())
+        assert schema.validate(document), str(schema.error_log)
