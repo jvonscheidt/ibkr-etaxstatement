@@ -48,7 +48,9 @@ def _validate(root: ET.Element) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("input", help="Path to IBKR Tax.xml FlexQuery export")
     parser.add_argument("output", help="Path for the generated eCH-196 XML file")
     parser.add_argument(
@@ -83,7 +85,9 @@ def main() -> int:
     root = build(data, eur_chf_override=args.eur_chf_rate)
 
     if not _validate(root):
-        print("Error: generated XML is invalid; no output was written.", file=sys.stderr)
+        print(
+            "Error: generated XML is invalid; no output was written.", file=sys.stderr
+        )
         return 1
 
     output_path = Path(args.output)

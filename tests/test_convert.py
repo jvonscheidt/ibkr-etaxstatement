@@ -23,9 +23,7 @@ def test_xml_only_import_does_not_load_barcode_dependencies(monkeypatch):
     importlib.import_module("convert")
 
 
-def test_validation_failure_returns_error_without_writing(
-    monkeypatch, tmp_path, data
-):
+def test_validation_failure_returns_error_without_writing(monkeypatch, tmp_path, data):
     import convert
 
     input_path = tmp_path / "input.xml"
