@@ -71,7 +71,8 @@ importieren"*.
 In IBKR Client Portal, create a **FlexQuery** covering the tax year with Open
 Positions, Trades, Cash Transactions and Conversion Rates, run it, and save the
 XML as `data/Tax.xml`. Dates in the export are `DD/MM/YYYY`; the base currency is
-assumed to be EUR.
+assumed to be EUR. The converter derives the tax period from the FlexStatement
+dates and rejects partial-year exports.
 
 ## How it works
 

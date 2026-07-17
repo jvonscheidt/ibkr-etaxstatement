@@ -8,7 +8,6 @@ import pytest
 
 from src.generate_ech196 import (
     NS,
-    YEAR_END,
     _chf,
     _fx_to_chf,
     _security_category,
@@ -16,6 +15,8 @@ from src.generate_ech196 import (
     build,
     serialize,
 )
+
+YEAR_END = date(2025, 12, 31)
 
 
 def _q(tag: str) -> str:
@@ -166,6 +167,39 @@ class TestBuild:
         assert doc_id.startswith("CH")
         assert "20251231" in doc_id
         assert doc_id.endswith("01")
+
+    def test_period_is_derived_from_export(self, account):
+        from src.parse_ibkr import IBKRData, OpenPosition
+
+        year_end = date(2024, 12, 31)
+        position = OpenPosition(
+            isin="IE00BKM4GZ66", symbol="EIMI",
+            description="ISHARES CORE MSCI EM IMI ACC", currency="EUR",
+            fx_rate_to_base=1.0, quantity=1, mark_price=10, position_value=10,
+            issuer_country_code="IE", report_date=year_end, sub_category="ETF",
+        )
+        data = IBKRData(
+            account, [position], [],
+            {(year_end, "CHF", "EUR"): 1.05},
+            period_from=date(2024, 1, 1), period_to=year_end,
+        )
+
+        root = build(data)
+
+        assert root.get("taxPeriod") == "2024"
+        assert root.get("periodFrom") == "2024-01-01"
+        assert root.get("periodTo") == "2024-12-31"
+        assert "20241231" in root.get("id")
+        tax_value = root.find(
+            f"{_q('listOfSecurities')}/{_q('depot')}/"
+            f"{_q('security')}/{_q('taxValue')}"
+        )
+        assert tax_value.get("referenceDate") == "2024-12-31"
+
+    def test_partial_year_export_is_rejected(self, data):
+        data.period_from = date(2025, 2, 1)
+        with pytest.raises(ValueError, match="full calendar year"):
+            build(data)
 
     def test_serialize_roundtrips(self, data):
         xml = serialize(build(data))

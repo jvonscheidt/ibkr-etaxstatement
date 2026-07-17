@@ -19,31 +19,32 @@ from pathlib import Path
 
 from src.parse_ibkr import parse
 from src.generate_ech196 import build, serialize
-from src.generate_barcode_pdf import generate_barcode_pdf
 
 
-def _validate(output_path: Path, root: ET.Element) -> None:
+def _validate(root: ET.Element) -> bool:
     try:
         from lxml import etree as lxml_et
     except ImportError:
         print("lxml not installed — skipping XSD validation (pip install lxml)")
-        return
+        return True
 
-    xsd_path = Path("documentation/eCH-0196-2-2.xsd")
+    xsd_path = Path(__file__).resolve().parent / "documentation" / "eCH-0196-2-2.xsd"
     if not xsd_path.exists():
         print("XSD not found at documentation/eCH-0196-2-2.xsd — skipping validation")
         print("Download from: https://www.ech.ch/de/ech/ech-0196/2.2.0")
-        return
+        return True
 
     schema = lxml_et.XMLSchema(lxml_et.parse(str(xsd_path)))
     xml_str = serialize(root)
     doc = lxml_et.fromstring(xml_str.encode())
     if schema.validate(doc):
         print("XSD validation passed.")
+        return True
     else:
         print("XSD validation FAILED:")
         for err in schema.error_log:
             print(f"  Line {err.line}: {err.message}")
+        return False
 
 
 def main() -> int:
@@ -81,14 +82,25 @@ def main() -> int:
     print("Generating eCH-196 XML...")
     root = build(data, eur_chf_override=args.eur_chf_rate)
 
+    if not _validate(root):
+        print("Error: generated XML is invalid; no output was written.", file=sys.stderr)
+        return 1
+
     output_path = Path(args.output)
     xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n' + serialize(root)
     output_path.write_text(xml_content, encoding="utf-8")
     print(f"Written:   {output_path}")
 
-    _validate(output_path, root)
-
     if args.barcode_pdf:
+        try:
+            from src.generate_barcode_pdf import generate_barcode_pdf
+        except ImportError as exc:
+            print(
+                f"Error: barcode PDF dependencies are not installed ({exc}). "
+                "Run: pip install -r requirements.txt",
+                file=sys.stderr,
+            )
+            return 1
         pdf_path = Path(args.barcode_pdf)
         print("Generating barcode PDF...")
         generate_barcode_pdf(output_path, pdf_path)
