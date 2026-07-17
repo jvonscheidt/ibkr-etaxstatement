@@ -51,10 +51,12 @@ def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> float:
     CHF→EUR rate gives us EUR→CHF = 1/(CHF→EUR).
     For any other currency: currency→CHF = (currency→EUR) / (CHF→EUR).
     """
+
     # Find the closest available rate on or before ref_date
     def _rate(from_c: str, to_c: str) -> float | None:
         # Try exact date first, then walk back up to 5 trading days
         from datetime import timedelta
+
         for delta in range(6):
             d = ref_date - timedelta(days=delta)
             r = fx_rates.get((d, from_c, to_c))
@@ -125,7 +127,9 @@ def _statement_period(data: IBKRData) -> tuple[date, date]:
     if period_to is None and data.positions:
         period_to = max(pos.report_date for pos in data.positions)
     if period_to is None and data.cash_transactions:
-        period_to = date(max(tx.settle_date.year for tx in data.cash_transactions), 12, 31)
+        period_to = date(
+            max(tx.settle_date.year for tx in data.cash_transactions), 12, 31
+        )
     if period_to is None:
         raise ValueError("Cannot determine tax period from the IBKR export")
 
@@ -186,16 +190,20 @@ def _build_securities(
             sec_attrs["securityType"] = sec_type
         sec_el = ET.SubElement(depot_el, _q("security"), **sec_attrs)
 
-        ET.SubElement(sec_el, _q("taxValue"), **{
-            "referenceDate": year_end.isoformat(),
-            "quotationType": "PIECE",
-            "quantity": _chf(pos.quantity),
-            "balanceCurrency": pos.currency,
-            "unitPrice": _chf(pos.mark_price),
-            "balance": _chf(pos.position_value),
-            "exchangeRate": str(round(rate, 6)),
-            "value": _chf(chf_value),
-        })
+        ET.SubElement(
+            sec_el,
+            _q("taxValue"),
+            **{
+                "referenceDate": year_end.isoformat(),
+                "quotationType": "PIECE",
+                "quantity": _chf(pos.quantity),
+                "balanceCurrency": pos.currency,
+                "unitPrice": _chf(pos.mark_price),
+                "balance": _chf(pos.position_value),
+                "exchangeRate": str(round(rate, 6)),
+                "value": _chf(chf_value),
+            },
+        )
 
         # Payments linked to this security
         income_txs = income_by_isin.get(pos.isin, [])
@@ -289,17 +297,21 @@ def _build_security_payments(
         total_rev_b += gross_b_chf
         total_wht += wht_chf
 
-        ET.SubElement(sec_el, _q("payment"), **{
-            "paymentDate": pay_date.isoformat(),
-            "quotationType": "PIECE",
-            "quantity": _chf(quantity),
-            "amountCurrency": txs[0].currency,
-            "amount": _chf(gross_b),
-            "exchangeRate": str(round(rate, 6)),
-            "grossRevenueA": "0.00",
-            "grossRevenueB": _chf(gross_b_chf),
-            "withHoldingTaxClaim": _chf(wht_chf),
-        })
+        ET.SubElement(
+            sec_el,
+            _q("payment"),
+            **{
+                "paymentDate": pay_date.isoformat(),
+                "quotationType": "PIECE",
+                "quantity": _chf(quantity),
+                "amountCurrency": txs[0].currency,
+                "amount": _chf(gross_b),
+                "exchangeRate": str(round(rate, 6)),
+                "grossRevenueA": "0.00",
+                "grossRevenueB": _chf(gross_b_chf),
+                "withHoldingTaxClaim": _chf(wht_chf),
+            },
+        )
 
     # WHT withheld on dates with no matching income (e.g. adjustments) would
     # otherwise be dropped — emit each as a standalone reclaim so no DA-1
@@ -311,17 +323,21 @@ def _build_security_payments(
         rate = _fx_to_chf(ccy, wht_date, fx_rates)
         wht_chf = round(-net_wht[wht_date] * rate, 2)
         total_wht += wht_chf
-        ET.SubElement(sec_el, _q("payment"), **{
-            "paymentDate": wht_date.isoformat(),
-            "quotationType": "PIECE",
-            "quantity": _chf(quantity),
-            "amountCurrency": ccy,
-            "amount": "0.00",
-            "exchangeRate": str(round(rate, 6)),
-            "grossRevenueA": "0.00",
-            "grossRevenueB": "0.00",
-            "withHoldingTaxClaim": _chf(wht_chf),
-        })
+        ET.SubElement(
+            sec_el,
+            _q("payment"),
+            **{
+                "paymentDate": wht_date.isoformat(),
+                "quotationType": "PIECE",
+                "quantity": _chf(quantity),
+                "amountCurrency": ccy,
+                "amount": "0.00",
+                "exchangeRate": str(round(rate, 6)),
+                "grossRevenueA": "0.00",
+                "grossRevenueB": "0.00",
+                "withHoldingTaxClaim": _chf(wht_chf),
+            },
+        )
 
     return total_rev_b, total_wht
 
@@ -355,30 +371,38 @@ def _build_bank_accounts(data: IBKRData) -> tuple[ET.Element, float, float, floa
         acct_rev_b = 0.0
         acct_wht = 0.0
 
-        ba_el = ET.SubElement(list_el, _q("bankAccount"), **{
-            "bankAccountName": f"IBKR {ccy} Cash",
-            "bankAccountCountry": "GB",   # IB-UK
-            "bankAccountCurrency": ccy,
-            "totalTaxValue": "0.00",       # closing balance not available
-            "totalGrossRevenueA": "0.00",
-            "totalGrossRevenueB": "0.00",  # filled in below
-            "totalWithHoldingTaxClaim": "0.00",
-        })
+        ba_el = ET.SubElement(
+            list_el,
+            _q("bankAccount"),
+            **{
+                "bankAccountName": f"IBKR {ccy} Cash",
+                "bankAccountCountry": "GB",  # IB-UK
+                "bankAccountCurrency": ccy,
+                "totalTaxValue": "0.00",  # closing balance not available
+                "totalGrossRevenueA": "0.00",
+                "totalGrossRevenueB": "0.00",  # filled in below
+                "totalWithHoldingTaxClaim": "0.00",
+            },
+        )
 
         # One payment per interest-received event
         for tx in sorted(income_txs, key=lambda t: t.settle_date):
             rate = _fx_to_chf(tx.currency, tx.settle_date, data.fx_rates)
             rev_b_chf = round(tx.amount * rate, 2)
             acct_rev_b += rev_b_chf
-            ET.SubElement(ba_el, _q("payment"), **{
-                "paymentDate": tx.settle_date.isoformat(),
-                "amountCurrency": tx.currency,
-                "amount": _chf(tx.amount),
-                "exchangeRate": str(round(rate, 6)),
-                "grossRevenueA": "0.00",
-                "grossRevenueB": _chf(rev_b_chf),
-                "withHoldingTaxClaim": "0.00",
-            })
+            ET.SubElement(
+                ba_el,
+                _q("payment"),
+                **{
+                    "paymentDate": tx.settle_date.isoformat(),
+                    "amountCurrency": tx.currency,
+                    "amount": _chf(tx.amount),
+                    "exchangeRate": str(round(rate, 6)),
+                    "grossRevenueA": "0.00",
+                    "grossRevenueB": _chf(rev_b_chf),
+                    "withHoldingTaxClaim": "0.00",
+                },
+            )
 
         # Net WHT for this currency: negative = still withheld (reclaimable)
         net_wht_ccy = sum(t.amount for t in wht_txs)
@@ -392,15 +416,19 @@ def _build_bank_accounts(data: IBKRData) -> tuple[ET.Element, float, float, floa
                 pay_date = last_pay.settle_date
             else:
                 pay_date = sorted(wht_txs, key=lambda t: t.settle_date)[-1].settle_date
-            ET.SubElement(ba_el, _q("payment"), **{
-                "paymentDate": pay_date.isoformat(),
-                "amountCurrency": ccy,
-                "amount": "0.00",
-                "exchangeRate": str(round(rate, 6)),
-                "grossRevenueA": "0.00",
-                "grossRevenueB": "0.00",
-                "withHoldingTaxClaim": _chf(wht_chf),
-            })
+            ET.SubElement(
+                ba_el,
+                _q("payment"),
+                **{
+                    "paymentDate": pay_date.isoformat(),
+                    "amountCurrency": ccy,
+                    "amount": "0.00",
+                    "exchangeRate": str(round(rate, 6)),
+                    "grossRevenueA": "0.00",
+                    "grossRevenueB": "0.00",
+                    "withHoldingTaxClaim": _chf(wht_chf),
+                },
+            )
 
         ba_el.set("totalGrossRevenueB", _chf(acct_rev_b))
         ba_el.set("totalWithHoldingTaxClaim", _chf(acct_wht))
@@ -435,13 +463,17 @@ def _build_liabilities(data: IBKRData) -> ET.Element:
 
     for ccy in sorted(interest_by_ccy):
         txs = interest_by_ccy[ccy]
-        la_el = ET.SubElement(list_el, _q("liabilityAccount"), **{
-            "bankAccountName": f"IBKR {ccy} Margin",
-            "bankAccountCountry": "GB",   # IB-UK
-            "bankAccountCurrency": ccy,
-            "totalTaxValue": "0.00",        # closing debt balance not available
-            "totalGrossRevenueB": "0.00",   # filled in below
-        })
+        la_el = ET.SubElement(
+            list_el,
+            _q("liabilityAccount"),
+            **{
+                "bankAccountName": f"IBKR {ccy} Margin",
+                "bankAccountCountry": "GB",  # IB-UK
+                "bankAccountCurrency": ccy,
+                "totalTaxValue": "0.00",  # closing debt balance not available
+                "totalGrossRevenueB": "0.00",  # filled in below
+            },
+        )
 
         acct_rev_b = 0.0
         for tx in sorted(txs, key=lambda t: t.settle_date):
@@ -449,13 +481,17 @@ def _build_liabilities(data: IBKRData) -> ET.Element:
             amount = -tx.amount  # "Broker Interest Paid" amounts are negative
             rev_b_chf = round(amount * rate, 2)
             acct_rev_b += rev_b_chf
-            ET.SubElement(la_el, _q("payment"), **{
-                "paymentDate": tx.settle_date.isoformat(),
-                "amountCurrency": tx.currency,
-                "amount": _chf(amount),
-                "exchangeRate": str(round(rate, 6)),
-                "grossRevenueB": _chf(rev_b_chf),
-            })
+            ET.SubElement(
+                la_el,
+                _q("payment"),
+                **{
+                    "paymentDate": tx.settle_date.isoformat(),
+                    "amountCurrency": tx.currency,
+                    "amount": _chf(amount),
+                    "exchangeRate": str(round(rate, 6)),
+                    "grossRevenueB": _chf(rev_b_chf),
+                },
+            )
 
         la_el.set("totalGrossRevenueB", _chf(acct_rev_b))
         total_rev_b += acct_rev_b
@@ -523,11 +559,15 @@ def build(data: IBKRData, eur_chf_override: float | None = None) -> ET.Element:
     ET.SubElement(root, _q("institution"), name="Interactive Brokers")
 
     # client
-    ET.SubElement(root, _q("client"), **{
-        "clientNumber": data.account.account_id,
-        "firstName": data.account.first_name,
-        "lastName": data.account.last_name,
-    })
+    ET.SubElement(
+        root,
+        _q("client"),
+        **{
+            "clientNumber": data.account.account_id,
+            "firstName": data.account.first_name,
+            "lastName": data.account.last_name,
+        },
+    )
 
     # XSD sequence: listOfBankAccounts, listOfLiabilities, listOfExpenses, listOfSecurities
     if list(ba_list):

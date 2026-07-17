@@ -28,11 +28,20 @@ def test_withholding_tax_not_double_counted():
         CashTransaction(date(2025, 3, 1), "CHF", 1.0, 100.0, "Dividends", "", "X", "S"),
         CashTransaction(date(2025, 9, 1), "CHF", 1.0, 100.0, "Dividends", "", "X", "S"),
     ]
-    wht = [CashTransaction(date(2025, 3, 1), "CHF", 1.0, -35.0, "Withholding Tax", "", "X", "S")]
+    wht = [
+        CashTransaction(
+            date(2025, 3, 1), "CHF", 1.0, -35.0, "Withholding Tax", "", "X", "S"
+        )
+    ]
     # CHF payments convert 1:1, but _fx_to_chf still needs a CHF->EUR rate row.
-    fx = {(date(2025, 3, 1), "CHF", "EUR"): 1.07, (date(2025, 9, 1), "CHF", "EUR"): 1.07}
+    fx = {
+        (date(2025, 3, 1), "CHF", "EUR"): 1.07,
+        (date(2025, 9, 1), "CHF", "EUR"): 1.07,
+    }
 
-    rev_b, wht_total = _build_security_payments(sec_el, income, wht, fx_rates=fx, quantity=10.0)
+    rev_b, wht_total = _build_security_payments(
+        sec_el, income, wht, fx_rates=fx, quantity=10.0
+    )
 
     claim_in_xml = sum(
         float(p.get("withHoldingTaxClaim", "0")) for p in sec_el.findall(_q("payment"))
@@ -48,19 +57,34 @@ def test_dividend_wht_aggregates_into_root_totals(tmp_path):
     # Bug #2 (fixed), end to end: a distributing security's dividend and its
     # foreign WHT must appear in the security payment AND in the root totals.
     from datetime import date as _date
-    from src.parse_ibkr import AccountInfo, CashTransaction as CT, IBKRData, OpenPosition
+    from src.parse_ibkr import (
+        AccountInfo,
+        CashTransaction as CT,
+        IBKRData,
+        OpenPosition,
+    )
     from src.generate_ech196 import build
 
     isin = "IE00DIST0001"
     pos = OpenPosition(
-        isin=isin, symbol="VWRD", description="VANGUARD FTSE ALL-WORLD DIST",
-        currency="USD", fx_rate_to_base=0.85, quantity=10, mark_price=100,
-        position_value=1000, issuer_country_code="IE",
+        isin=isin,
+        symbol="VWRD",
+        description="VANGUARD FTSE ALL-WORLD DIST",
+        currency="USD",
+        fx_rate_to_base=0.85,
+        quantity=10,
+        mark_price=100,
+        position_value=1000,
+        issuer_country_code="IE",
         report_date=_date(2025, 12, 31),
         sub_category="ETF",
     )
-    div = CT(_date(2025, 6, 15), "USD", 0.85, 40.0, "Dividends", "Q2 dividend", isin, "VWRD")
-    wht = CT(_date(2025, 6, 15), "USD", 0.85, -6.0, "Withholding Tax", "US WHT", isin, "VWRD")
+    div = CT(
+        _date(2025, 6, 15), "USD", 0.85, 40.0, "Dividends", "Q2 dividend", isin, "VWRD"
+    )
+    wht = CT(
+        _date(2025, 6, 15), "USD", 0.85, -6.0, "Withholding Tax", "US WHT", isin, "VWRD"
+    )
     fx = {
         (_date(2025, 12, 31), "CHF", "EUR"): 1.074,
         (_date(2025, 12, 31), "USD", "EUR"): 0.85135,
@@ -101,12 +125,24 @@ def test_income_from_security_sold_before_year_end_is_reported():
     isin = "US0378331005"
     pay_date = date(2025, 5, 15)
     dividend = CashTransaction(
-        pay_date, "USD", 0.85, 10.0, "Dividends",
-        "AAPL CASH DIVIDEND", isin, "AAPL",
+        pay_date,
+        "USD",
+        0.85,
+        10.0,
+        "Dividends",
+        "AAPL CASH DIVIDEND",
+        isin,
+        "AAPL",
     )
     withholding = CashTransaction(
-        pay_date, "USD", 0.85, -1.5, "Withholding Tax",
-        "AAPL US TAX", isin, "AAPL",
+        pay_date,
+        "USD",
+        0.85,
+        -1.5,
+        "Withholding Tax",
+        "AAPL US TAX",
+        isin,
+        "AAPL",
     )
     data = IBKRData(
         AccountInfo("U1", "A B", "A", "B", "ZH", "EUR", "IB-UK"),
@@ -122,9 +158,7 @@ def test_income_from_security_sold_before_year_end_is_reported():
 
     root = build(data)
 
-    security = root.find(
-        f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}"
-    )
+    security = root.find(f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}")
     assert security is not None
     assert security.get("isin") == isin
     assert security.find(_q("taxValue")) is None

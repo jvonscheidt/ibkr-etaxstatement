@@ -41,23 +41,23 @@ BARCODES_PER_PAGE = 6
 _SCALE = 1.0 / 0.97
 
 # Element dimensions (PDF, after scale correction)
-_EL_W_CM = 0.042 * _SCALE   # width per module column  ≈ 0.0433 cm
-_EL_H_CM = 0.080 * _SCALE   # height per row            ≈ 0.0825 cm
+_EL_W_CM = 0.042 * _SCALE  # width per module column  ≈ 0.0433 cm
+_EL_H_CM = 0.080 * _SCALE  # height per row            ≈ 0.0825 cm
 
 # Natural barcode size (290 modules wide × 35 rows tall)
-_BC_W_CM = 290 * _EL_W_CM   # ≈ 12.56 cm
+_BC_W_CM = 290 * _EL_W_CM  # ≈ 12.56 cm
 _BC_H_CM = ROWS * _EL_H_CM  # ≈  2.89 cm
 
 # After 90° CW rotation: width ↔ height
-_BC_ROT_W_CM = _BC_H_CM     # ≈  2.89 cm
-_BC_ROT_H_CM = _BC_W_CM     # ≈ 12.56 cm
+_BC_ROT_W_CM = _BC_H_CM  # ≈  2.89 cm
+_BC_ROT_H_CM = _BC_W_CM  # ≈ 12.56 cm
 
 # Page margins
 _TOP_CM = 5.0
 _SIDE_CM = 2.0
 _BOT_CM = 2.0
-_GAP_CM = 1.0          # minimum gap between segments
-_FOLD_EXTRA_CM = 0.5   # extra gap between segments 3 and 4
+_GAP_CM = 1.0  # minimum gap between segments
+_FOLD_EXTRA_CM = 0.5  # extra gap between segments 3 and 4
 
 # Code 128 (1D barcode)
 # The reference eSteuerauszug (data/example_etax.pdf) distinguishes its page
@@ -65,12 +65,12 @@ _FOLD_EXTRA_CM = 0.5   # extra gap between segments 3 and 4
 # the human-readable pages. eCH-0270 §2.1 fixes only the first 3 digits (196 for
 # eCH-0196) and leaves the remaining 13 issuer-defined; we mirror the reference
 # so ZHPrivateTax's scanner can tell barcode sheets from statement pages.
-_CODE128_FORM_2D   = "196"  # 2D-barcode sheet (eCH-0196)
+_CODE128_FORM_2D = "196"  # 2D-barcode sheet (eCH-0196)
 _CODE128_FORM_TEXT = "197"  # human-readable statement page (no 2D barcode)
-_CODE128_VER  = "22"    # version 2.2
-_CODE128_ORG  = IBKR_CLEARING_NUMBER  # Interactive Brokers clearing number
-_CODE128_ORI  = "0"     # orientation: 0 = landscape (Querformat)
-_CODE128_DIR  = "1"     # Pos ID: 1 = top/bottom, left-to-right
+_CODE128_VER = "22"  # version 2.2
+_CODE128_ORG = IBKR_CLEARING_NUMBER  # Interactive Brokers clearing number
+_CODE128_ORI = "0"  # orientation: 0 = landscape (Querformat)
+_CODE128_DIR = "1"  # Pos ID: 1 = top/bottom, left-to-right
 
 
 def _barcode_images(segments: list) -> list[Image.Image]:
@@ -98,13 +98,27 @@ def _code128_value(page_num: int, has_2d: bool, form: str) -> str:
     Format: Form(3) + Version(2) + Clearing(5) + Page(3) + 2D_flag(1) + Orientation(1) + PosID(1)
     """
     flag = "1" if has_2d else "0"
-    value = form + _CODE128_VER + _CODE128_ORG + f"{page_num:03d}" + flag + _CODE128_ORI + _CODE128_DIR
+    value = (
+        form
+        + _CODE128_VER
+        + _CODE128_ORG
+        + f"{page_num:03d}"
+        + flag
+        + _CODE128_ORI
+        + _CODE128_DIR
+    )
     assert len(value) == 16, f"Code128 payload length != 16: {value!r}"
     return value
 
 
-def _draw_code128(c: canvas.Canvas, page_w_cm: float, page_h_cm: float,
-                  page_num: int, has_2d: bool, form: str) -> None:
+def _draw_code128(
+    c: canvas.Canvas,
+    page_w_cm: float,
+    page_h_cm: float,
+    page_num: int,
+    has_2d: bool,
+    form: str,
+) -> None:
     """Draw Code 128 at top-left, 10 mm from left edge, within 30 mm from top."""
     value = _code128_value(page_num, has_2d, form)
     bc = Code128(
@@ -131,13 +145,15 @@ def _statement_securities(root: ET.Element) -> list[dict]:
     rows = []
     for sec in root.iter(_q("security")):
         tv = sec.find(_q("taxValue"))
-        rows.append({
-            "name": sec.get("securityName", ""),
-            "isin": sec.get("isin", ""),
-            "ccy": sec.get("currency", ""),
-            "qty": (tv.get("quantity", "") if tv is not None else ""),
-            "value": (tv.get("value", "") if tv is not None else ""),
-        })
+        rows.append(
+            {
+                "name": sec.get("securityName", ""),
+                "isin": sec.get("isin", ""),
+                "ccy": sec.get("currency", ""),
+                "qty": (tv.get("quantity", "") if tv is not None else ""),
+                "value": (tv.get("value", "") if tv is not None else ""),
+            }
+        )
     return rows
 
 
@@ -153,8 +169,9 @@ _ST_COLS = (  # (label, x in cm from left, right-aligned?)
 )
 
 
-def _draw_statement_pages(c: canvas.Canvas, root: ET.Element,
-                          page_num_start: int) -> int:
+def _draw_statement_pages(
+    c: canvas.Canvas, root: ET.Element, page_num_start: int
+) -> int:
     """Draw human-readable Wertschriftenverzeichnis page(s), 1D barcode each.
 
     Returns the number of pages drawn. These are normal portrait pages (no
@@ -173,7 +190,9 @@ def _draw_statement_pages(c: canvas.Canvas, root: ET.Element,
     client_name = ""
     client_no = ""
     if client is not None:
-        client_name = f"{client.get('firstName', '')} {client.get('lastName', '')}".strip()
+        client_name = (
+            f"{client.get('firstName', '')} {client.get('lastName', '')}".strip()
+        )
         client_no = client.get("clientNumber", "")
 
     secs = _statement_securities(root)
@@ -181,8 +200,9 @@ def _draw_statement_pages(c: canvas.Canvas, root: ET.Element,
 
     page_num = page_num_start
     for pi in range(n_pages):
-        _draw_code128(c, page_w_cm, page_h_cm, page_num,
-                      has_2d=False, form=_CODE128_FORM_TEXT)
+        _draw_code128(
+            c, page_w_cm, page_h_cm, page_num, has_2d=False, form=_CODE128_FORM_TEXT
+        )
 
         y = h_pt - 3.8 * cm  # below the top 1D barcode
         c.setFont("Helvetica-Bold", 14)
@@ -243,8 +263,14 @@ def _draw_statement_pages(c: canvas.Canvas, root: ET.Element,
     return n_pages
 
 
-def _draw_barcode_page(c: canvas.Canvas, page_w_cm: float, page_h_cm: float,
-                        portrait_w_pt: float, images: list[Image.Image], page_num: int) -> None:
+def _draw_barcode_page(
+    c: canvas.Canvas,
+    page_w_cm: float,
+    page_h_cm: float,
+    portrait_w_pt: float,
+    images: list[Image.Image],
+    page_num: int,
+) -> None:
     """Draw up to BARCODES_PER_PAGE rotated PDF417 images on a landscape page.
 
     Segment order runs right-to-left: the first (lowest-index) Macro PDF417
@@ -281,7 +307,7 @@ def _draw_barcode_page(c: canvas.Canvas, page_w_cm: float, page_h_cm: float,
     c.transform(0, 1, -1, 0, portrait_w_pt, 0)
 
     for k, img in enumerate(images):
-        slot = (BARCODES_PER_PAGE - 1) - k   # rightmost slot = segment 0
+        slot = (BARCODES_PER_PAGE - 1) - k  # rightmost slot = segment 0
         x_cm = slot_x(slot)
 
         buf = io.BytesIO()
@@ -332,18 +358,16 @@ def generate_barcode_pdf(xml_path: Path, pdf_path: Path) -> None:
     # valid PDF417 value in 0..899) deterministically from the document id so
     # the same statement always yields the same, document-unique file id.
     digest = hashlib.sha256(doc_id.encode("utf-8")).digest()
-    file_id = [
-        ((digest[2 * i] << 8) | digest[2 * i + 1]) % 900 for i in range(4)
-    ]
+    file_id = [((digest[2 * i] << 8) | digest[2 * i + 1]) % 900 for i in range(4)]
 
     segments = encode_macro(
         compressed,
         columns=COLS,
         security_level=EC_LEVEL,
         force_rows=ROWS,
-        segment_size=450,   # eCH-0270 max bytes per segment
+        segment_size=450,  # eCH-0270 max bytes per segment
         file_name=doc_id,
-        file_id=file_id,    # BEIL2 §2.2: 4-integer PDFMacroFileId (see above)
+        file_id=file_id,  # BEIL2 §2.2: 4-integer PDFMacroFileId (see above)
         force_binary=True,  # compressed bytes must not be re-interpreted as text/numeric
     )
     print(f"  PDF417 segments: {len(segments)}  file_id: {file_id}")
@@ -383,11 +407,13 @@ def generate_barcode_pdf(xml_path: Path, pdf_path: Path) -> None:
     reader = PdfReader(str(pdf_path))
     writer = PdfWriter()
     for idx, page in enumerate(reader.pages):
-        if idx >= n_text_pages:   # barcode sheet
+        if idx >= n_text_pages:  # barcode sheet
             page.rotate(90)
         writer.add_page(page)
     with open(pdf_path, "wb") as f:
         writer.write(f)
 
-    print(f"  Written: {pdf_path}  ({n_text_pages} statement page(s) + "
-          f"{len(reader.pages) - n_text_pages} barcode sheet(s))")
+    print(
+        f"  Written: {pdf_path}  ({n_text_pages} statement page(s) + "
+        f"{len(reader.pages) - n_text_pages} barcode sheet(s))"
+    )

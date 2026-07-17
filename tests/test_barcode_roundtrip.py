@@ -44,7 +44,8 @@ def _decode_segments(pdf_path) -> list[bytes]:
             pix = page.get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             symbols = [
-                r for r in zxingcpp.read_barcodes(img)
+                r
+                for r in zxingcpp.read_barcodes(img)
                 if str(r.format) == "PDF417" and r.bytes
             ]
             symbols.sort(key=lambda r: r.position.top_left.x, reverse=True)
@@ -86,9 +87,9 @@ def test_barcode_pdf_roundtrips_to_source_xml(tmp_path):
     file_ids = {s["file_id"] for s in segments}
     assert len(file_ids) == 1, f"segments disagree on Macro file id: {file_ids}"
     (file_id,) = file_ids
-    assert file_id is not None and len(file_id) == 12, (
-        f"Macro file id must be 4 codewords (12 digits), got {file_id!r}"
-    )
+    assert (
+        file_id is not None and len(file_id) == 12
+    ), f"Macro file id must be 4 codewords (12 digits), got {file_id!r}"
 
 
 def test_pdf_has_portrait_statement_then_rotated_barcode_sheet(tmp_path):
@@ -110,11 +111,17 @@ def test_pdf_has_portrait_statement_then_rotated_barcode_sheet(tmp_path):
     with fitz.open(str(pdf_path)) as doc:
         rotations = [page.rotation for page in doc]
 
-    assert len(rotations) >= 2, "expected at least one statement page and one barcode sheet"
+    assert (
+        len(rotations) >= 2
+    ), "expected at least one statement page and one barcode sheet"
     # Leading statement page(s) are portrait/unrotated; trailing barcode sheet(s)
     # carry /Rotate 90. Order matters: no rotated page may precede an unrotated one.
-    assert rotations[0] == 0, f"first page must be an unrotated statement page, got {rotations}"
-    assert rotations[-1] == 90, f"last page must be a rotated barcode sheet, got {rotations}"
+    assert (
+        rotations[0] == 0
+    ), f"first page must be an unrotated statement page, got {rotations}"
+    assert (
+        rotations[-1] == 90
+    ), f"last page must be a rotated barcode sheet, got {rotations}"
     first_rotated = rotations.index(90)
     assert all(r == 0 for r in rotations[:first_rotated]), rotations
     assert all(r == 90 for r in rotations[first_rotated:]), rotations

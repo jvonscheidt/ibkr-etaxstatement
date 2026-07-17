@@ -61,10 +61,19 @@ class TestFxToChf:
 class TestSecurityClassification:
     def _pos(self, sub_category="ETF", description="FUND"):
         from src.parse_ibkr import OpenPosition
+
         return OpenPosition(
-            isin="X", symbol="S", description=description, currency="EUR",
-            fx_rate_to_base=1.0, quantity=1, mark_price=1, position_value=1,
-            issuer_country_code="IE", report_date=YEAR_END, sub_category=sub_category,
+            isin="X",
+            symbol="S",
+            description=description,
+            currency="EUR",
+            fx_rate_to_base=1.0,
+            quantity=1,
+            mark_price=1,
+            position_value=1,
+            issuer_country_code="IE",
+            report_date=YEAR_END,
+            sub_category=sub_category,
         )
 
     def test_etf_maps_to_fund(self):
@@ -74,14 +83,23 @@ class TestSecurityClassification:
         assert _security_category(self._pos(sub_category="STK")) == "SHARE"
 
     def test_accumulation_detected(self):
-        assert _security_type(self._pos(description="MSCI WORLD ACC")) == "FUND.ACCUMULATION"
+        assert (
+            _security_type(self._pos(description="MSCI WORLD ACC"))
+            == "FUND.ACCUMULATION"
+        )
 
     def test_distribution_detected(self):
-        assert _security_type(self._pos(description="MSCI WORLD DIST")) == "FUND.DISTRIBUTION"
+        assert (
+            _security_type(self._pos(description="MSCI WORLD DIST"))
+            == "FUND.DISTRIBUTION"
+        )
 
     def test_unknown_defaults_to_accumulation(self):
         with pytest.warns(UserWarning):
-            assert _security_type(self._pos(description="SOME FUND")) == "FUND.ACCUMULATION"
+            assert (
+                _security_type(self._pos(description="SOME FUND"))
+                == "FUND.ACCUMULATION"
+            )
 
     def test_share_category_has_no_fund_security_type(self):
         # Stocks use the SHARE.* enumeration, not FUND.ACCUMULATION/DISTRIBUTION.
@@ -109,42 +127,61 @@ class TestBuild:
 
     def test_security_value_uses_year_end_rate(self, data):
         root = build(data)
-        tax_value = root.find(f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}/{_q('taxValue')}")
+        tax_value = root.find(
+            f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}/{_q('taxValue')}"
+        )
         assert tax_value is not None
         # 3000 EUR * (1/1.074) CHF/EUR
         assert float(tax_value.get("value")) == pytest.approx(3000 / 1.074, abs=0.01)
 
     def test_eur_chf_override_changes_valuation(self, data):
         root = build(data, eur_chf_override=0.90)
-        tax_value = root.find(f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}/{_q('taxValue')}")
+        tax_value = root.find(
+            f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}/{_q('taxValue')}"
+        )
         # 3000 EUR * 0.90 = 2700.00 CHF
         assert float(tax_value.get("value")) == pytest.approx(2700.00, abs=0.01)
 
     def test_bank_accounts_precede_securities(self, data):
         root = build(data)
         children = [c.tag for c in root]
-        assert _q("listOfBankAccounts") in children, "cash interest should produce a bank account"
-        assert children.index(_q("listOfBankAccounts")) < children.index(_q("listOfSecurities"))
+        assert (
+            _q("listOfBankAccounts") in children
+        ), "cash interest should produce a bank account"
+        assert children.index(_q("listOfBankAccounts")) < children.index(
+            _q("listOfSecurities")
+        )
 
-    def test_broker_interest_paid_becomes_liability(self, account, eur_position, fx_rates):
+    def test_broker_interest_paid_becomes_liability(
+        self, account, eur_position, fx_rates
+    ):
         from src.parse_ibkr import CashTransaction, IBKRData
 
         debit_interest = CashTransaction(
-            settle_date=date(2025, 3, 5), currency="USD", fx_rate_to_base=0.85,
-            amount=-0.15, tx_type="Broker Interest Paid",
-            description="USD DEBIT INT FOR FEB-2025", isin="", symbol="",
+            settle_date=date(2025, 3, 5),
+            currency="USD",
+            fx_rate_to_base=0.85,
+            amount=-0.15,
+            tx_type="Broker Interest Paid",
+            description="USD DEBIT INT FOR FEB-2025",
+            isin="",
+            symbol="",
         )
         fx = dict(fx_rates)
         fx[(date(2025, 3, 5), "USD", "EUR")] = 0.86
         fx[(date(2025, 3, 5), "CHF", "EUR")] = 1.07
         data = IBKRData(
-            account=account, positions=[eur_position],
-            cash_transactions=[debit_interest], fx_rates=fx,
+            account=account,
+            positions=[eur_position],
+            cash_transactions=[debit_interest],
+            fx_rates=fx,
         )
         root = build(data)
 
         liabilities = root.find(_q("listOfLiabilities"))
-        assert liabilities is not None, "debit interest should produce a listOfLiabilities section"
+        assert (
+            liabilities is not None
+        ), "debit interest should produce a listOfLiabilities section"
         payment = liabilities.find(f"{_q('liabilityAccount')}/{_q('payment')}")
         assert payment is not None
         assert float(payment.get("grossRevenueB")) > 0
@@ -154,7 +191,9 @@ class TestBuild:
         assert root.get("totalGrossRevenueB") == "0.00"
 
         children = [c.tag for c in root]
-        assert children.index(_q("listOfLiabilities")) < children.index(_q("listOfSecurities"))
+        assert children.index(_q("listOfLiabilities")) < children.index(
+            _q("listOfSecurities")
+        )
 
     def test_no_liabilities_section_when_no_debit_interest(self, data):
         root = build(data)
@@ -173,15 +212,25 @@ class TestBuild:
 
         year_end = date(2024, 12, 31)
         position = OpenPosition(
-            isin="IE00BKM4GZ66", symbol="EIMI",
-            description="ISHARES CORE MSCI EM IMI ACC", currency="EUR",
-            fx_rate_to_base=1.0, quantity=1, mark_price=10, position_value=10,
-            issuer_country_code="IE", report_date=year_end, sub_category="ETF",
+            isin="IE00BKM4GZ66",
+            symbol="EIMI",
+            description="ISHARES CORE MSCI EM IMI ACC",
+            currency="EUR",
+            fx_rate_to_base=1.0,
+            quantity=1,
+            mark_price=10,
+            position_value=10,
+            issuer_country_code="IE",
+            report_date=year_end,
+            sub_category="ETF",
         )
         data = IBKRData(
-            account, [position], [],
+            account,
+            [position],
+            [],
             {(year_end, "CHF", "EUR"): 1.05},
-            period_from=date(2024, 1, 1), period_to=year_end,
+            period_from=date(2024, 1, 1),
+            period_to=year_end,
         )
 
         root = build(data)

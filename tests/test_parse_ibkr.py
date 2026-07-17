@@ -47,17 +47,26 @@ class TestAccountParsing:
         return el
 
     def test_simple_name_and_canton(self):
-        acct = _parse_account(self._elem(
-            accountId="U1", name="Max Mustermann", state="CH-ZH", currency="EUR",
-        ))
+        acct = _parse_account(
+            self._elem(
+                accountId="U1",
+                name="Max Mustermann",
+                state="CH-ZH",
+                currency="EUR",
+            )
+        )
         assert acct.first_name == "Max"
         assert acct.last_name == "Mustermann"
         assert acct.canton == "ZH"
 
     def test_nobiliary_particle_kept_in_last_name(self):
-        acct = _parse_account(self._elem(
-            accountId="U1", name="Johannes von Scheidt", state="CH-ZG",
-        ))
+        acct = _parse_account(
+            self._elem(
+                accountId="U1",
+                name="Johannes von Scheidt",
+                state="CH-ZG",
+            )
+        )
         assert acct.first_name == "Johannes"
         assert acct.last_name == "von Scheidt"
 
@@ -90,16 +99,23 @@ class TestParseRealFile:
         # Deposits/Withdrawals and "AF" must be excluded; only income types remain.
         types = {t.tx_type for t in parsed.cash_transactions}
         assert types <= {
-            "Withholding Tax", "Broker Interest Received", "Broker Interest Paid",
-            "Dividends", "Payment In Lieu Of Dividends",
+            "Withholding Tax",
+            "Broker Interest Received",
+            "Broker Interest Paid",
+            "Dividends",
+            "Payment In Lieu Of Dividends",
         }
         assert "Deposits/Withdrawals" not in types
         # The sample holds distributing securities, so dividends must be captured.
         assert "Dividends" in types
 
     def test_fx_rates_present(self, parsed):
-        assert parsed.fx_rates[(date(2025, 12, 31), "CHF", "EUR")] == pytest.approx(1.074)
-        assert parsed.fx_rates[(date(2025, 12, 31), "USD", "EUR")] == pytest.approx(0.85135)
+        assert parsed.fx_rates[(date(2025, 12, 31), "CHF", "EUR")] == pytest.approx(
+            1.074
+        )
+        assert parsed.fx_rates[(date(2025, 12, 31), "USD", "EUR")] == pytest.approx(
+            0.85135
+        )
 
     def test_statement_period_is_parsed(self, parsed):
         assert parsed.period_from == date(2025, 1, 1)

@@ -9,7 +9,9 @@ from src.generate_ech196 import build, serialize
 
 from .conftest import TAX_XML, XSD_PATH
 
-lxml_etree = pytest.importorskip("lxml.etree", reason="lxml required for XSD validation")
+lxml_etree = pytest.importorskip(
+    "lxml.etree", reason="lxml required for XSD validation"
+)
 
 
 @pytest.fixture(scope="module")
