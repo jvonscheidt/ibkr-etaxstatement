@@ -124,16 +124,10 @@ The portable x64 executable is written to `dist\ibkr-etaxstatement.exe`.
 
 ### WinGet publishing
 
-The initial package version must be submitted from
-`packaging\winget\0.1.0` before automated updates can run:
-
-```powershell
-wingetcreate submit packaging\winget\0.1.0
-```
-
-For subsequent releases, `.github/workflows/release.yml` opens the
-`microsoft/winget-pkgs` pull request when a GitHub release is published. The
-repository requires:
+`.github/workflows/release.yml` opens the `microsoft/winget-pkgs` pull request
+when a GitHub release is published. It submits the checked-in manifest for the
+initial package version and generates updates from release assets for later
+versions. The repository requires:
 
 1. A `jvonscheidt/winget-pkgs` fork.
 2. A `WINGET_TOKEN` repository secret containing a classic GitHub PAT with the
