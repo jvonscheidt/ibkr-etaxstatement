@@ -177,4 +177,5 @@ All conversion rates convert source currency to EUR.
 - Use `gh` for GitHub work
 - Keep PRs small and single-purpose
 - Require green CI before merge
-- Update README before version tag
+- For releases, update README, validate winget manifest, tag new version.
+- Once PR for winget is opened by Actions, complete the checklist and CLA.
