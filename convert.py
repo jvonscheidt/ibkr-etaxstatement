@@ -17,8 +17,8 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from src.parse_ibkr import parse
 from src.generate_ech196 import build, serialize
+from src.parse_ibkr import parse
 
 
 def _validate(root: ET.Element) -> bool:

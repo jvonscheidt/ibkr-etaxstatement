@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Optional
+import math
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from datetime import date
 
 
-def _date(s: str) -> Optional[date]:
+def _date(s: str) -> date | None:
     """Parse DD/MM/YYYY; strip time component if present."""
     if not s:
         return None
     s = s.split(";")[0]
     try:
-        return datetime.strptime(s, "%d/%m/%Y").date()
+        day, month, year = (int(part) for part in s.split("/"))
+        return date(year, month, day)
     except ValueError:
         return None
 
@@ -26,6 +27,31 @@ def _float(s: str) -> float:
         return float(s)
     except ValueError:
         return 0.0
+
+
+def _required_date(value: str | None, field: str) -> date:
+    parsed = _date(value or "")
+    if parsed is None:
+        raise ValueError(f"Invalid or missing {field}: {value!r}")
+    return parsed
+
+
+def _required_float(value: str | None, field: str) -> float:
+    if value is None or not value.strip():
+        raise ValueError(f"Invalid or missing {field}: {value!r}")
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid or missing {field}: {value!r}") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"Invalid or missing {field}: {value!r}")
+    return parsed
+
+
+def _optional_date(value: str | None, field: str) -> date | None:
+    if not value:
+        return None
+    return _required_date(value, field)
 
 
 @dataclass
@@ -80,8 +106,8 @@ class IBKRData:
     # (report_date, from_currency, to_currency) → rate
     # All rates are X → EUR (base currency)
     fx_rates: dict[tuple[date, str, str], float]
-    period_from: Optional[date] = None
-    period_to: Optional[date] = None
+    period_from: date | None = None
+    period_to: date | None = None
 
 
 def _parse_account(elem) -> AccountInfo:
@@ -108,14 +134,12 @@ def _parse_account(elem) -> AccountInfo:
     )
 
 
-def _parse_positions(stmt, period_to: Optional[date] = None) -> list[OpenPosition]:
+def _parse_positions(stmt, period_to: date | None = None) -> list[OpenPosition]:
     positions = []
     for op in stmt.findall("OpenPositions/OpenPosition"):
         if op.get("levelOfDetail") != "SUMMARY":
             continue
-        report_date = _date(op.get("reportDate", ""))
-        if report_date is None:
-            continue
+        report_date = _required_date(op.get("reportDate"), "OpenPosition.reportDate")
         if period_to is not None and report_date != period_to:
             continue
         if period_to is None and (report_date.month != 12 or report_date.day != 31):
@@ -129,10 +153,16 @@ def _parse_positions(stmt, period_to: Optional[date] = None) -> list[OpenPositio
                 symbol=op.get("symbol", ""),
                 description=op.get("description", ""),
                 currency=op.get("currency", ""),
-                fx_rate_to_base=_float(op.get("fxRateToBase", "1")) or 1.0,
-                quantity=_float(op.get("position", "0")),
-                mark_price=_float(op.get("markPrice", "0")),
-                position_value=_float(op.get("positionValue", "0")),
+                fx_rate_to_base=_required_float(
+                    op.get("fxRateToBase", "1"), "OpenPosition.fxRateToBase"
+                ),
+                quantity=_required_float(op.get("position"), "OpenPosition.position"),
+                mark_price=_required_float(
+                    op.get("markPrice"), "OpenPosition.markPrice"
+                ),
+                position_value=_required_float(
+                    op.get("positionValue"), "OpenPosition.positionValue"
+                ),
                 issuer_country_code=op.get("issuerCountryCode", ""),
                 report_date=report_date,
                 sub_category=op.get("subCategory", ""),
@@ -159,10 +189,12 @@ def _parse_cash_transactions(stmt) -> list[CashTransaction]:
         settle = ct.get("settleDate", "") or ct.get("dateTime", "")
         txs.append(
             CashTransaction(
-                settle_date=_date(settle),
+                settle_date=_required_date(settle, "CashTransaction.settleDate"),
                 currency=ct.get("currency", ""),
-                fx_rate_to_base=_float(ct.get("fxRateToBase", "1")) or 1.0,
-                amount=_float(ct.get("amount", "0")),
+                fx_rate_to_base=_required_float(
+                    ct.get("fxRateToBase", "1"), "CashTransaction.fxRateToBase"
+                ),
+                amount=_required_float(ct.get("amount"), "CashTransaction.amount"),
                 tx_type=tx_type,
                 description=ct.get("description", ""),
                 isin=ct.get("isin", ""),
@@ -178,11 +210,14 @@ def _parse_cash_transactions(stmt) -> list[CashTransaction]:
 def _parse_fx_rates(stmt) -> dict[tuple[date, str, str], float]:
     rates: dict[tuple[date, str, str], float] = {}
     for cr in stmt.findall("ConversionRates/ConversionRate"):
-        rd = _date(cr.get("reportDate", ""))
+        rd = _required_date(cr.get("reportDate"), "ConversionRate.reportDate")
         from_c = cr.get("fromCurrency", "")
         to_c = cr.get("toCurrency", "")
-        rate = _float(cr.get("rate", ""))
-        if rd and from_c and to_c and rate:
+        rate = _required_float(cr.get("rate"), "ConversionRate.rate")
+        # IBKR emits -1 when no rate is available for a currency/date.
+        if rate <= 0:
+            continue
+        if from_c and to_c:
             rates[(rd, from_c, to_c)] = rate
     return rates
 
@@ -194,8 +229,8 @@ def parse(xml_path: str) -> IBKRData:
     if stmt is None:
         raise ValueError("No FlexStatement found in XML")
 
-    period_from = _date(stmt.get("fromDate", ""))
-    period_to = _date(stmt.get("toDate", ""))
+    period_from = _optional_date(stmt.get("fromDate"), "FlexStatement.fromDate")
+    period_to = _optional_date(stmt.get("toDate"), "FlexStatement.toDate")
 
     return IBKRData(
         account=_parse_account(stmt.find("AccountInformation")),

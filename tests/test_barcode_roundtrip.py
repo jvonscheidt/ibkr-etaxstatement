@@ -24,9 +24,9 @@ pytest.importorskip("reportlab", reason="reportlab required to draw the PDF")
 pytest.importorskip("pypdf", reason="pypdf required for page rotation")
 Image = pytest.importorskip("PIL.Image", reason="Pillow required to buffer images")
 
-from src.parse_ibkr import parse
-from src.generate_ech196 import build, serialize
 from src.generate_barcode_pdf import generate_barcode_pdf
+from src.generate_ech196 import build, serialize
+from src.parse_ibkr import parse
 
 from .conftest import TAX_XML
 

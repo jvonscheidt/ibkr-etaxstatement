@@ -5,13 +5,13 @@ Both bugs are now fixed; these tests guard against regressions.
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from datetime import date
 
-import xml.etree.ElementTree as ET
 import pytest
 
-from src.parse_ibkr import CashTransaction, parse
 from src.generate_ech196 import NS, _build_security_payments, serialize
+from src.parse_ibkr import CashTransaction, parse
 
 from .conftest import XSD_PATH
 
@@ -57,13 +57,16 @@ def test_dividend_wht_aggregates_into_root_totals(tmp_path):
     # Bug #2 (fixed), end to end: a distributing security's dividend and its
     # foreign WHT must appear in the security payment AND in the root totals.
     from datetime import date as _date
+
+    from src.generate_ech196 import build
     from src.parse_ibkr import (
         AccountInfo,
-        CashTransaction as CT,
         IBKRData,
         OpenPosition,
     )
-    from src.generate_ech196 import build
+    from src.parse_ibkr import (
+        CashTransaction as CT,
+    )
 
     isin = "IE00DIST0001"
     pos = OpenPosition(

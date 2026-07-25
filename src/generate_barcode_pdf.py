@@ -16,18 +16,18 @@ from __future__ import annotations
 
 import hashlib
 import io
-import zlib
 import xml.etree.ElementTree as ET
+import zlib
 from pathlib import Path
 
+from pdf417gen import encode_macro, render_image
 from PIL import Image
-from pdf417gen import render_image, encode_macro
 from pypdf import PdfReader, PdfWriter
+from reportlab.graphics.barcode.code128 import Code128
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import cm, mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-from reportlab.graphics.barcode.code128 import Code128
 
 from .generate_ech196 import IBKR_CLEARING_NUMBER, NS
 
