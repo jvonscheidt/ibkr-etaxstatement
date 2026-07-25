@@ -142,6 +142,38 @@ class TestBuild:
         # 3000 EUR * 0.90 = 2700.00 CHF
         assert float(tax_value.get("value")) == pytest.approx(2700.00, abs=0.01)
 
+    def test_eur_chf_override_does_not_mutate_input(self, data):
+        original_rates = dict(data.fx_rates)
+
+        build(data, eur_chf_override=0.90)
+
+        assert data.fx_rates == original_rates
+
+    def test_bank_withholding_uses_each_transaction_date(
+        self, account, eur_position, fx_rates
+    ):
+        from src.parse_ibkr import CashTransaction, IBKRData
+
+        first_date = date(2025, 3, 1)
+        second_date = date(2025, 9, 1)
+        withholding = [
+            CashTransaction(
+                first_date, "EUR", 1.0, -10.0, "Withholding Tax", "", "", ""
+            ),
+            CashTransaction(
+                second_date, "EUR", 1.0, -10.0, "Withholding Tax", "", "", ""
+            ),
+        ]
+        fx = dict(fx_rates)
+        fx[(first_date, "CHF", "EUR")] = 1.0
+        fx[(second_date, "CHF", "EUR")] = 2.0
+        data = IBKRData(account, [eur_position], withholding, fx)
+
+        root = build(data)
+
+        # 10 EUR * 1 CHF/EUR + 10 EUR * 0.5 CHF/EUR
+        assert root.get("totalWithHoldingTaxClaim") == "15.00"
+
     def test_bank_accounts_precede_securities(self, data):
         root = build(data)
         children = [c.tag for c in root]

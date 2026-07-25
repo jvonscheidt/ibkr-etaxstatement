@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from datetime import date
 
 import pytest
 
 from src.parse_ibkr import _date, _float, _parse_account, parse
-import xml.etree.ElementTree as ET
 
 from .conftest import TAX_XML
 
@@ -138,3 +138,34 @@ def test_positions_exclude_non_summary_and_non_year_end(tmp_path):
     parsed = parse(str(f))
     # Only the LOT-excluded / mid-year / no-ISIN rows drop out; X4 remains.
     assert [p.isin for p in parsed.positions] == ["X4"]
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "field"),
+    [
+        ("amount", "N/A", "CashTransaction.amount"),
+        ("settleDate", "2025-06-15", "CashTransaction.settleDate"),
+    ],
+)
+def test_invalid_cash_transaction_fields_are_rejected(
+    tmp_path, attribute, value, field
+):
+    attrs = {
+        "type": "Dividends",
+        "isin": "X1",
+        "currency": "USD",
+        "amount": "10",
+        "settleDate": "15/06/2025",
+    }
+    attrs[attribute] = value
+    cash_transaction = ET.Element("CashTransaction", attrs)
+    cash_xml = ET.tostring(cash_transaction, encoding="unicode")
+    xml = f"""<FlexQueryResponse><FlexStatements><FlexStatement>
+      <AccountInformation accountId="U1" name="A B" state="CH-ZH" currency="EUR"/>
+      <CashTransactions>{cash_xml}</CashTransactions>
+    </FlexStatement></FlexStatements></FlexQueryResponse>"""
+    path = tmp_path / "invalid.xml"
+    path.write_text(xml, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        parse(str(path))

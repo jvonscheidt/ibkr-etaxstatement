@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.parse_ibkr import parse
 from src.generate_ech196 import build, serialize
+from src.parse_ibkr import parse
 
 from .conftest import TAX_XML, XSD_PATH
 
