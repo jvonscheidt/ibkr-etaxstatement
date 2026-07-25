@@ -20,7 +20,7 @@ concurrency:
 jobs:
   publish-winget:
     if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Check publishing credentials
         env:
@@ -48,34 +48,16 @@ jobs:
       - name: Check out initial manifests
         if: steps.package.outputs.exists == 'false'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install WingetCreate
-        if: steps.package.outputs.exists == 'false'
-        shell: pwsh
-        run: |
-          $url = "https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe"
-          Invoke-WebRequest -Uri $url -OutFile wingetcreate.exe
-          $expected = "24042BD37915805615E6CF969AC57C6439124C3FE85823327F5F3FB24BD9FFEA"
-          $actual = (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash
-          if ($actual -ne $expected) {
-            throw "WingetCreate checksum mismatch: $actual"
-          }
       - name: Submit initial WinGet manifest
         if: steps.package.outputs.exists == 'false'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
-          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release-tag }}
-        shell: pwsh
-        run: |
-          $version = $env:RELEASE_TAG -replace '^v', ''
-          $manifest = Join-Path "packaging\winget" $version
-          if (-not (Test-Path $manifest)) {
-            throw "No checked-in WinGet manifest found at $manifest"
-          }
-          .\wingetcreate.exe submit `
-            --prtitle "New package: jvonscheidt.ibkr-etaxstatement version $version" `
-            --token $env:WINGET_TOKEN `
-            --no-open `
-            $manifest
+        with:
+          github-token: ${{ secrets.WINGET_TOKEN }}
+          script: |
+            const submit = require('./.github/scripts/submit-initial-winget.js')
+            await submit({ github, context, core })
       - name: Publish WinGet update
         if: steps.package.outputs.exists == 'true'
         uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5 # v2
