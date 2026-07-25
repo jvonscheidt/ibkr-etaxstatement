@@ -44,6 +44,17 @@ realised trade gains/losses are intentionally **not** parsed or reported.
 pip install -r requirements.txt
 ```
 
+### Windows executable
+
+Release builds provide a standalone `ibkr-etaxstatement.exe`. After the package
+is accepted into the Windows Package Manager repository, install it with:
+
+```powershell
+winget install --id jvonscheidt.ibkr-etaxstatement --exact
+```
+
+The executable uses the same command line as `python convert.py`.
+
 The eCH-0196 XSD is not redistributed here. For XSD validation, download it from
 <https://www.ech.ch/de/ech/ech-0196/2.2.0> and place it at
 `documentation/eCH-0196-2-2.xsd` (validation is skipped if it or `lxml` is
@@ -101,3 +112,12 @@ python -m pytest
 The suite covers parsing, FX→CHF conversion, eCH-0196 generation, an end-to-end
 XSD validation, and barcode round-trip/structure (the barcode tests self-skip if
 their optional decode dependencies are absent).
+
+## Release build
+
+```powershell
+pip install -r requirements-build.txt
+python -m PyInstaller --noconfirm --clean ibkr-etaxstatement.spec
+```
+
+The portable x64 executable is written to `dist\ibkr-etaxstatement.exe`.

@@ -20,6 +20,8 @@ from pathlib import Path
 from src.generate_ech196 import build, serialize
 from src.parse_ibkr import parse
 
+__version__ = "0.1.0"
+
 
 def _validate(root: ET.Element) -> bool:
     try:
@@ -51,6 +53,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("input", help="Path to IBKR Tax.xml FlexQuery export")
     parser.add_argument("output", help="Path for the generated eCH-196 XML file")
     parser.add_argument(

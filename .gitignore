@@ -6,6 +6,8 @@ __pycache__/
 output.xml
 output_barcode.pdf
 *.pdf417
+build/
+dist/
 
 # Debug/scratch artifacts from barcode work
 /*.png
