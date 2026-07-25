@@ -1,0 +1,39 @@
+name: Publish Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: Existing GitHub release tag to publish to WinGet
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winget-${{ github.event.release.tag_name || inputs.release-tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish-winget:
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check publishing credentials
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if [ -z "$WINGET_TOKEN" ]; then
+            echo "::error::Configure the WINGET_TOKEN repository secret."
+            exit 1
+          fi
+      - name: Publish package to WinGet
+        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5 # v2
+        with:
+          identifier: jvonscheidt.ibkr-etaxstatement
+          installers-regex: '\.exe$'
+          release-tag: ${{ github.event.release.tag_name || inputs.release-tag }}
+          token: ${{ secrets.WINGET_TOKEN }}
