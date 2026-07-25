@@ -17,7 +17,10 @@ module.exports = async ({ github, context, core }) => {
     "winget",
     version,
   )
-  if (!fs.isDirectorySync(manifestDirectory)) {
+  if (
+    !fs.existsSync(manifestDirectory) ||
+    !fs.statSync(manifestDirectory).isDirectory()
+  ) {
     throw new Error(`No checked-in manifests found at ${manifestDirectory}`)
   }
 
