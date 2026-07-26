@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Repository guidance for coding agents.
+Use sub-agents or tools wherever possible.
 
 ## Purpose
 
