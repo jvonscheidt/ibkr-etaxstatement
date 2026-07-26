@@ -13,7 +13,11 @@ Options:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import tempfile
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -21,6 +25,37 @@ from src.generate_ech196 import build, serialize
 from src.parse_ibkr import parse
 
 __version__ = "0.1.0"
+
+XSD_URL = "https://www.ech.ch/xmlns/eCH-0196/2.2/eCH-0196-2-2.xsd"
+XSD_PATH = Path(__file__).resolve().parent / "documentation" / "eCH-0196-2-2.xsd"
+
+
+def _download_xsd() -> None:
+    print("Downloading latest eCH-0196 XSD...")
+    temp_path: Path | None = None
+    try:
+        with urllib.request.urlopen(XSD_URL, timeout=30) as response:
+            content = response.read()
+
+        root = ET.fromstring(content)
+        if root.tag != "{http://www.w3.org/2001/XMLSchema}schema":
+            raise ValueError("download is not an XML Schema")
+
+        XSD_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=XSD_PATH.parent, delete=False
+        ) as temp_file:
+            temp_file.write(content)
+            temp_path = Path(temp_file.name)
+        os.replace(temp_path, XSD_PATH)
+        print(f"XSD updated: {XSD_PATH}")
+    except (OSError, urllib.error.URLError, ET.ParseError, ValueError) as exc:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        if XSD_PATH.exists():
+            print(f"Warning: XSD download failed ({exc}); using cached copy.")
+        else:
+            print(f"Warning: XSD download failed ({exc}); validation will be skipped.")
 
 
 def _validate(root: ET.Element) -> bool:
@@ -30,13 +65,12 @@ def _validate(root: ET.Element) -> bool:
         print("lxml not installed — skipping XSD validation (pip install lxml)")
         return True
 
-    xsd_path = Path(__file__).resolve().parent / "documentation" / "eCH-0196-2-2.xsd"
-    if not xsd_path.exists():
+    if not XSD_PATH.exists():
         print("XSD not found at documentation/eCH-0196-2-2.xsd — skipping validation")
         print("Download from: https://www.ech.ch/de/ech/ech-0196/2.2.0")
         return True
 
-    schema = lxml_et.XMLSchema(lxml_et.parse(str(xsd_path)))
+    schema = lxml_et.XMLSchema(lxml_et.parse(str(XSD_PATH)))
     xml_str = serialize(root)
     doc = lxml_et.fromstring(xml_str.encode())
     if schema.validate(doc):
@@ -75,6 +109,8 @@ def main() -> int:
     if not input_path.exists():
         print(f"Error: input file not found: {input_path}", file=sys.stderr)
         return 1
+
+    _download_xsd()
 
     print(f"Parsing {input_path}...")
     data = parse(str(input_path))

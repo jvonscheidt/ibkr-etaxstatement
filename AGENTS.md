@@ -72,9 +72,10 @@ ruff check .
 python -m pytest
 ```
 
-XSD validation runs when `lxml` and
-`documentation/eCH-0196-2-2.xsd` exist. `documentation/` is git-ignored local
-scratch space. Missing dependency or XSD causes explicit validation skip.
+Startup downloads the latest official v2.2 XSD to
+`documentation/eCH-0196-2-2.xsd`. `documentation/` is git-ignored local
+scratch space. A failed download uses the cached XSD; missing `lxml` or XSD
+causes an explicit validation skip.
 
 ## Structure
 

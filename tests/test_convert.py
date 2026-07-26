@@ -30,6 +30,7 @@ def test_validation_failure_returns_error_without_writing(monkeypatch, tmp_path,
     output_path = tmp_path / "output.xml"
     input_path.write_text("<unused/>", encoding="utf-8")
     monkeypatch.setattr(convert, "parse", lambda _path: data)
+    monkeypatch.setattr(convert, "_download_xsd", lambda: None)
     monkeypatch.setattr(convert, "_validate", lambda _root: False)
     monkeypatch.setattr(
         sys,
@@ -39,3 +40,51 @@ def test_validation_failure_returns_error_without_writing(monkeypatch, tmp_path,
 
     assert convert.main() == 1
     assert not output_path.exists()
+
+
+def test_download_xsd_replaces_cached_copy(monkeypatch, tmp_path):
+    import convert
+
+    xsd_path = tmp_path / "documentation" / "eCH-0196-2-2.xsd"
+    xsd_path.parent.mkdir()
+    xsd_path.write_text("old", encoding="utf-8")
+    content = (
+        b'<?xml version="1.0"?>'
+        b'<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>'
+    )
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return content
+
+    monkeypatch.setattr(convert, "XSD_PATH", xsd_path)
+    monkeypatch.setattr(
+        convert.urllib.request, "urlopen", lambda _url, timeout: Response()
+    )
+
+    convert._download_xsd()
+
+    assert xsd_path.read_bytes() == content
+
+
+def test_download_xsd_keeps_cached_copy_on_failure(monkeypatch, tmp_path):
+    import convert
+
+    xsd_path = tmp_path / "eCH-0196-2-2.xsd"
+    xsd_path.write_text("cached", encoding="utf-8")
+    monkeypatch.setattr(convert, "XSD_PATH", xsd_path)
+
+    def fail(_url, timeout):
+        raise OSError("offline")
+
+    monkeypatch.setattr(convert.urllib.request, "urlopen", fail)
+
+    convert._download_xsd()
+
+    assert xsd_path.read_text(encoding="utf-8") == "cached"

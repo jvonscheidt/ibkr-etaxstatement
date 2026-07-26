@@ -55,10 +55,10 @@ winget install --id jvonscheidt.ibkr-etaxstatement --exact
 
 The executable uses the same command line as `python convert.py`.
 
-The eCH-0196 XSD is not redistributed here. For XSD validation, download it from
-<https://www.ech.ch/de/ech/ech-0196/2.2.0> and place it at
-`documentation/eCH-0196-2-2.xsd` (validation is skipped if it or `lxml` is
-absent).
+The eCH-0196 XSD is not redistributed here. At startup, the converter downloads
+the latest official v2.2 schema to `documentation/eCH-0196-2-2.xsd`. If the
+download fails, a cached copy is used; validation is skipped if no copy or
+`lxml` is available.
 
 ## Usage
 
