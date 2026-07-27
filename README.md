@@ -46,8 +46,10 @@ pip install -r requirements.txt
 
 ### Windows executable
 
-Release builds provide a standalone `ibkr-etaxstatement.exe`. After the package
-is accepted into the Windows Package Manager repository, install it with:
+Download the standalone `ibkr-etaxstatement.exe` from the
+[latest release](https://github.com/jvonscheidt/ibkr-etaxstatement/releases/latest).
+After the package is accepted into the Windows Package Manager repository,
+install it with:
 
 ```powershell
 winget install --id jvonscheidt.ibkr-etaxstatement --exact

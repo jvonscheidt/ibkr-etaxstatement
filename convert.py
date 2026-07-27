@@ -24,7 +24,7 @@ from pathlib import Path
 from src.generate_ech196 import build, serialize
 from src.parse_ibkr import parse
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 XSD_URL = "https://www.ech.ch/xmlns/eCH-0196/2.2/eCH-0196-2-2.xsd"
 XSD_PATH = Path(__file__).resolve().parent / "documentation" / "eCH-0196-2-2.xsd"
