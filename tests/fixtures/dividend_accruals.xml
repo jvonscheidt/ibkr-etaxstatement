@@ -1,0 +1,29 @@
+<FlexQueryResponse>
+  <FlexStatements count="1">
+    <FlexStatement fromDate="01/01/2025" toDate="31/12/2025">
+      <AccountInformation accountId="U1234567" name="Max Mustermann" state="CH-ZH" currency="EUR" ibEntity="IB-UK"/>
+      <OpenPositions>
+        <OpenPosition levelOfDetail="SUMMARY" isin="US0378331005" symbol="TEST" description="SYNTHETIC SHARE" currency="USD" fxRateToBase="0.85" position="20.004" markPrice="100" positionValue="2000.4" issuerCountryCode="US" reportDate="31/12/2025" subCategory="STK"/>
+      </OpenPositions>
+      <CashTransactions>
+        <CashTransaction type="Dividends" isin="US0378331005" symbol="TEST" currency="USD" amount="40" settleDate="15/06/2025" exDate="01/06/2025" actionID="1001" conid="123" assetCategory="STK" issuerCountryCode="US"/>
+        <CashTransaction type="Withholding Tax" isin="US0378331005" symbol="TEST" currency="USD" amount="-6" settleDate="15/06/2025" exDate="01/06/2025" actionID="1001" conid="123" issuerCountryCode="US"/>
+        <CashTransaction type="Withholding Tax" isin="US0378331005" symbol="TEST" currency="USD" amount="1" settleDate="01/09/2025" exDate="01/06/2025" actionID="1001" conid="123" issuerCountryCode="US"/>
+        <CashTransaction type="Broker Interest Received" currency="EUR" amount="25" settleDate="15/06/2025"/>
+        <CashTransaction type="Broker Interest Paid" currency="USD" amount="-5" settleDate="15/06/2025"/>
+      </CashTransactions>
+      <ChangeInDividendAccruals>
+        <ChangeInDividendAccrual accountId="U1234567" isin="US0378331005" currency="USD" actionID="1001" conid="123" quantity="10.002" exDate="01/06/2025" payDate="15/06/2025" grossAmount="40" code="Po"/>
+        <ChangeInDividendAccrual accountId="U1234567" isin="US0378331005" currency="USD" actionID="1001" conid="123" quantity="10.002" exDate="01/06/2025" payDate="15/06/2025" grossAmount="-40" code="Re"/>
+      </ChangeInDividendAccruals>
+      <ConversionRates>
+        <ConversionRate reportDate="15/06/2025" fromCurrency="CHF" toCurrency="EUR" rate="1.07"/>
+        <ConversionRate reportDate="15/06/2025" fromCurrency="USD" toCurrency="EUR" rate="0.85"/>
+        <ConversionRate reportDate="01/09/2025" fromCurrency="CHF" toCurrency="EUR" rate="1.06"/>
+        <ConversionRate reportDate="01/09/2025" fromCurrency="USD" toCurrency="EUR" rate="0.84"/>
+        <ConversionRate reportDate="31/12/2025" fromCurrency="CHF" toCurrency="EUR" rate="1.074"/>
+        <ConversionRate reportDate="31/12/2025" fromCurrency="USD" toCurrency="EUR" rate="0.85135"/>
+      </ConversionRates>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>

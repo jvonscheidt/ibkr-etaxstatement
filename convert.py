@@ -23,6 +23,18 @@ from src.parse_ibkr import parse
 __version__ = "0.1.0"
 
 
+def _find_xsd() -> Path | None:
+    if getattr(sys, "frozen", False):
+        application_dir = Path(sys.executable).resolve().parent
+    else:
+        application_dir = Path(__file__).resolve().parent
+    for directory in (application_dir, Path.cwd()):
+        path = directory / "documentation" / "eCH-0196-2-2.xsd"
+        if path.is_file():
+            return path
+    return None
+
+
 def _validate(root: ET.Element) -> bool:
     try:
         from lxml import etree as lxml_et
@@ -30,9 +42,12 @@ def _validate(root: ET.Element) -> bool:
         print("lxml not installed — skipping XSD validation (pip install lxml)")
         return True
 
-    xsd_path = Path(__file__).resolve().parent / "documentation" / "eCH-0196-2-2.xsd"
-    if not xsd_path.exists():
-        print("XSD not found at documentation/eCH-0196-2-2.xsd — skipping validation")
+    xsd_path = _find_xsd()
+    if xsd_path is None:
+        print(
+            "XSD not found in documentation beside the application or in the "
+            "working directory — skipping validation"
+        )
         print("Download from: https://www.ech.ch/de/ech/ech-0196/2.2.0")
         return True
 
@@ -77,7 +92,11 @@ def main() -> int:
         return 1
 
     print(f"Parsing {input_path}...")
-    data = parse(str(input_path))
+    try:
+        data = parse(str(input_path))
+    except (ValueError, ET.ParseError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     print(f"Account:   {data.account.name} ({data.account.account_id})")
     print(f"Canton:    {data.account.canton}")
@@ -85,7 +104,11 @@ def main() -> int:
     print(f"Cash txns: {len(data.cash_transactions)}")
 
     print("Generating eCH-196 XML...")
-    root = build(data, eur_chf_override=args.eur_chf_rate)
+    try:
+        root = build(data, eur_chf_override=args.eur_chf_rate)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     if not _validate(root):
         print(

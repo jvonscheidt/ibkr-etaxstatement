@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 
 def _date(s: str) -> date | None:
@@ -54,6 +55,18 @@ def _optional_date(value: str | None, field: str) -> date | None:
     return _required_date(value, field)
 
 
+def _required_decimal(value: str | None, field: str) -> Decimal:
+    if value is None or not value.strip():
+        raise ValueError(f"Invalid or missing {field}: {value!r}")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError(f"Invalid or missing {field}: {value!r}") from exc
+    if not parsed.is_finite():
+        raise ValueError(f"Invalid or missing {field}: {value!r}")
+    return parsed
+
+
 @dataclass
 class AccountInfo:
     account_id: str
@@ -72,7 +85,7 @@ class OpenPosition:
     description: str
     currency: str
     fx_rate_to_base: float  # currency → base (EUR)
-    quantity: float
+    quantity: Decimal | float
     mark_price: float
     position_value: float  # in position currency
     issuer_country_code: str
@@ -96,6 +109,23 @@ class CashTransaction:
     asset_category: str = ""
     sub_category: str = ""
     issuer_country_code: str = ""
+    action_id: str = ""
+    conid: str = ""
+    model: str = ""
+    ex_date: date | None = None
+
+
+@dataclass(frozen=True)
+class DividendAccrual:
+    isin: str
+    currency: str
+    ex_date: date
+    pay_date: date
+    quantity: Decimal
+    gross_amount: Decimal
+    action_id: str = ""
+    conid: str = ""
+    model: str = ""
 
 
 @dataclass
@@ -108,6 +138,7 @@ class IBKRData:
     fx_rates: dict[tuple[date, str, str], float]
     period_from: date | None = None
     period_to: date | None = None
+    dividend_accruals: list[DividendAccrual] = field(default_factory=list)
 
 
 def _parse_account(elem) -> AccountInfo:
@@ -156,7 +187,7 @@ def _parse_positions(stmt, period_to: date | None = None) -> list[OpenPosition]:
                 fx_rate_to_base=_required_float(
                     op.get("fxRateToBase", "1"), "OpenPosition.fxRateToBase"
                 ),
-                quantity=_required_float(op.get("position"), "OpenPosition.position"),
+                quantity=_required_decimal(op.get("position"), "OpenPosition.position"),
                 mark_price=_required_float(
                     op.get("markPrice"), "OpenPosition.markPrice"
                 ),
@@ -202,9 +233,50 @@ def _parse_cash_transactions(stmt) -> list[CashTransaction]:
                 asset_category=ct.get("assetCategory", ""),
                 sub_category=ct.get("subCategory", ""),
                 issuer_country_code=ct.get("issuerCountryCode", ""),
+                action_id=ct.get("actionID", ""),
+                conid=ct.get("conid", ""),
+                model=ct.get("model", ""),
+                ex_date=_optional_date(ct.get("exDate"), "CashTransaction.exDate"),
             )
         )
     return txs
+
+
+def _parse_dividend_accruals(stmt, account_id: str) -> list[DividendAccrual]:
+    accruals = []
+    for elem in stmt.findall("ChangeInDividendAccruals/ChangeInDividendAccrual"):
+        if elem.get("accountId", account_id) != account_id:
+            raise ValueError("Dividend accrual account does not match the statement")
+        isin = elem.get("isin", "")
+        currency = elem.get("currency", "")
+        if not isin or not currency:
+            raise ValueError("Dividend accruals require ISIN and currency")
+        quantity = _required_decimal(elem.get("quantity"), "DividendAccrual.quantity")
+        if quantity <= 0:
+            raise ValueError(
+                "Dividend accrual quantity must be positive; non-positive "
+                "entitlements require manual reconciliation"
+            )
+        ex_date = _required_date(elem.get("exDate"), "DividendAccrual.exDate")
+        pay_date = _required_date(elem.get("payDate"), "DividendAccrual.payDate")
+        if ex_date > pay_date:
+            raise ValueError("Dividend accrual exDate must not be after payDate")
+        accruals.append(
+            DividendAccrual(
+                isin=isin,
+                currency=currency,
+                ex_date=ex_date,
+                pay_date=pay_date,
+                quantity=quantity,
+                gross_amount=_required_decimal(
+                    elem.get("grossAmount"), "DividendAccrual.grossAmount"
+                ),
+                action_id=elem.get("actionID", ""),
+                conid=elem.get("conid", ""),
+                model=elem.get("model", ""),
+            )
+        )
+    return accruals
 
 
 def _parse_fx_rates(stmt) -> dict[tuple[date, str, str], float]:
@@ -225,18 +297,26 @@ def _parse_fx_rates(stmt) -> dict[tuple[date, str, str], float]:
 def parse(xml_path: str) -> IBKRData:
     tree = ET.parse(xml_path)
     root = tree.getroot()
-    stmt = root.find("FlexStatements/FlexStatement")
-    if stmt is None:
+    statements = root.findall("FlexStatements/FlexStatement")
+    if not statements:
         raise ValueError("No FlexStatement found in XML")
+    if len(statements) != 1:
+        raise ValueError(
+            "Multiple FlexStatements are not supported; export one account "
+            "and one full calendar year per input file."
+        )
+    stmt = statements[0]
 
     period_from = _optional_date(stmt.get("fromDate"), "FlexStatement.fromDate")
     period_to = _optional_date(stmt.get("toDate"), "FlexStatement.toDate")
+    account = _parse_account(stmt.find("AccountInformation"))
 
     return IBKRData(
-        account=_parse_account(stmt.find("AccountInformation")),
+        account=account,
         positions=_parse_positions(stmt, period_to),
         cash_transactions=_parse_cash_transactions(stmt),
         fx_rates=_parse_fx_rates(stmt),
         period_from=period_from,
         period_to=period_to,
+        dividend_accruals=_parse_dividend_accruals(stmt, account.account_id),
     )

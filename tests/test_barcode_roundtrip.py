@@ -28,7 +28,7 @@ from src.generate_barcode_pdf import generate_barcode_pdf
 from src.generate_ech196 import build, serialize
 from src.parse_ibkr import parse
 
-from .conftest import TAX_XML
+from .conftest import INCOME_XML
 
 
 def _decode_segments(pdf_path) -> list[bytes]:
@@ -57,13 +57,10 @@ def _decode_segments(pdf_path) -> list[bytes]:
 
 
 def test_barcode_pdf_roundtrips_to_source_xml(tmp_path):
-    if not TAX_XML.exists():
-        pytest.skip(f"sample data missing: {TAX_XML}")
-
     xml_path = tmp_path / "out.xml"
     pdf_path = tmp_path / "out_barcode.pdf"
 
-    root = build(parse(str(TAX_XML)), eur_chf_override=0.9311)
+    root = build(parse(str(INCOME_XML)), eur_chf_override=0.9311)
     xml_path.write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n' + serialize(root),
         encoding="utf-8",
@@ -96,12 +93,9 @@ def test_pdf_has_portrait_statement_then_rotated_barcode_sheet(tmp_path):
     """Structure must be human-readable page(s) first, then rotated barcode
     sheet(s) — mirroring the reference eSteuerauszug. Checks page rotation
     metadata only (no barcode decode), so it's deterministic everywhere."""
-    if not TAX_XML.exists():
-        pytest.skip(f"sample data missing: {TAX_XML}")
-
     xml_path = tmp_path / "out.xml"
     pdf_path = tmp_path / "out_barcode.pdf"
-    root = build(parse(str(TAX_XML)), eur_chf_override=0.9311)
+    root = build(parse(str(INCOME_XML)), eur_chf_override=0.9311)
     xml_path.write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n' + serialize(root),
         encoding="utf-8",

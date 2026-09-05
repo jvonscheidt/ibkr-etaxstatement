@@ -36,6 +36,9 @@ class TestFxToChf:
     def test_chf_is_identity(self, fx_rates):
         assert _fx_to_chf("CHF", YEAR_END, fx_rates) == 1.0
 
+    def test_chf_needs_no_conversion_rates(self):
+        assert _fx_to_chf("CHF", YEAR_END, {}) == 1.0
+
     def test_eur_to_chf_is_reciprocal(self, fx_rates):
         # EUR->CHF = 1 / (CHF->EUR) = 1 / 1.074
         assert _fx_to_chf("EUR", YEAR_END, fx_rates) == pytest.approx(1 / 1.074)
@@ -149,7 +152,86 @@ class TestBuild:
 
         assert data.fx_rates == original_rates
 
-    def test_bank_withholding_uses_each_transaction_date(
+    def test_valuation_override_does_not_change_payment_date_rates(self, data):
+        from dataclasses import replace
+
+        from src.parse_ibkr import CashTransaction
+
+        from .conftest import with_dividend_accruals
+
+        data.positions.append(replace(data.positions[0], currency="USD"))
+        data.cash_transactions = [
+            CashTransaction(
+                YEAR_END,
+                "EUR",
+                1.0,
+                100,
+                "Dividends",
+                "",
+                data.positions[0].isin,
+                "TEST",
+            ),
+            CashTransaction(
+                YEAR_END,
+                "USD",
+                0.85,
+                -15,
+                "Withholding Tax",
+                "",
+                data.positions[0].isin,
+                "TEST",
+            ),
+            CashTransaction(
+                YEAR_END, "EUR", 1.0, 10, "Broker Interest Received", "", "", ""
+            ),
+            CashTransaction(
+                YEAR_END, "USD", 0.85, -5, "Broker Interest Paid", "", "", ""
+            ),
+        ]
+
+        data = with_dividend_accruals(data)
+        original = build(data)
+        overridden = build(data, eur_chf_override=0.5)
+
+        assert original.get("totalTaxValue") != overridden.get("totalTaxValue")
+        assert original.get("totalGrossRevenueB") == overridden.get(
+            "totalGrossRevenueB"
+        )
+        assert [p.attrib for p in original.iter(_q("payment"))] == [
+            p.attrib for p in overridden.iter(_q("payment"))
+        ]
+        assert original.find(_q("listOfSecurities")).get("totalLumpSumTaxCredit") == (
+            overridden.find(_q("listOfSecurities")).get("totalLumpSumTaxCredit")
+        )
+
+    def test_override_does_not_supply_a_missing_income_rate(self, data):
+        from dataclasses import replace
+
+        data.cash_transactions = [
+            replace(data.cash_transactions[0], settle_date=YEAR_END, currency="EUR")
+        ]
+        data.fx_rates = {}
+
+        with pytest.raises(ValueError, match="No CHF"):
+            build(data, eur_chf_override=0.9)
+
+    @pytest.mark.parametrize("rate", [0, -1, float("inf"), float("nan")])
+    def test_invalid_valuation_override_is_rejected(self, data, rate):
+        with pytest.raises(ValueError, match="finite and positive"):
+            build(data, eur_chf_override=rate)
+
+    def test_chf_holdings_and_interest_work_without_fx(self, data):
+        from dataclasses import replace
+
+        data.positions = [replace(data.positions[0], currency="CHF")]
+        data.fx_rates = {}
+
+        root = build(data)
+
+        assert root.get("totalTaxValue") == "3000.00"
+        assert root.get("totalGrossRevenueB") == "2.85"
+
+    def test_foreign_bank_withholding_is_annotated_at_each_transaction_date(
         self, account, eur_position, fx_rates
     ):
         from src.parse_ibkr import CashTransaction, IBKRData
@@ -169,10 +251,17 @@ class TestBuild:
         fx[(second_date, "CHF", "EUR")] = 2.0
         data = IBKRData(account, [eur_position], withholding, fx)
 
-        root = build(data)
+        with pytest.warns(UserWarning, match="annotations only"):
+            root = build(data)
 
         # 10 EUR * 1 CHF/EUR + 10 EUR * 0.5 CHF/EUR
-        assert root.get("totalWithHoldingTaxClaim") == "15.00"
+        payments = root.findall(
+            f"{_q('listOfBankAccounts')}/{_q('bankAccount')}/{_q('payment')}"
+        )
+        assert "10.00 EUR (10.00 CHF)" in payments[0].get("name")
+        assert "10.00 EUR (5.00 CHF)" in payments[1].get("name")
+        assert root.get("totalWithHoldingTaxClaim") == "0.00"
+        assert root.get("totalGrossRevenueB") == "0.00"
 
     def test_bank_accounts_precede_securities(self, data):
         root = build(data)

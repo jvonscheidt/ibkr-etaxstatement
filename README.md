@@ -7,8 +7,8 @@ TaxMe) via *"Steuerausweis importieren"*.
 
 Swiss residents holding securities at IBKR get no Swiss tax statement from the
 broker. This tool builds a standards-compliant Wertschriftenverzeichnis from the
-data IBKR already exports, including the **DA-1** foreign-withholding-tax reclaim
-and deductible debit interest, so the positions and income can be imported
+data IBKR already exports, including foreign-withholding amounts for **DA-1**
+review and deductible debit interest, so the positions and income can be imported
 instead of typed in by hand.
 
 > **Disclaimer.** This is an independent, unofficial tool. It is **not**
@@ -19,13 +19,16 @@ instead of typed in by hand.
 
 ## Features
 
-- Parses IBKR FlexQuery XML (open positions, dividends, interest, withholding
-  tax, margin interest, FX rates).
+- Parses IBKR FlexQuery XML (open positions, dividend accruals, dividends,
+  interest, withholding tax, margin interest, FX rates).
+- Preserves fractional share quantities and uses historical dividend entitlement
+  quantities, rather than year-end holdings, for security payments.
 - Emits **eCH-0196 v2.2.0** XML, validated against the official XSD.
 - FX conversion of EUR/USD positions and income to **CHF**, with an optional
   override for the official ESTV year-end rate (Jahresendkurs).
-- **DA-1** reclaim data (`grossRevenueB` / `withHoldingTaxClaim`) for foreign
-  dividends, and deductible debit interest under `listOfLiabilities`.
+- Separate Swiss withholding claims (`grossRevenueA` / `withHoldingTaxClaim`)
+  from foreign dividend income and withholding (`grossRevenueB` /
+  `lumpSumTaxCreditAmount`), plus deductible debit interest under `listOfLiabilities`.
 - **eCH-0270 barcode PDF**: a human-readable Wertschriftenverzeichnis page plus
   PDF417 Structured Append barcode sheet(s), verified to import into
   ZHPrivateTax.
@@ -35,7 +38,7 @@ realised trade gains/losses are intentionally **not** parsed or reported.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - Dependencies in [`requirements.txt`](requirements.txt): `lxml` (XSD
   validation), and for the barcode PDF `pdf417gen` (vroonhof fork, installed
   from git), `reportlab`, `Pillow`, `python-barcode`, `pypdf`.
@@ -57,8 +60,11 @@ The executable uses the same command line as `python convert.py`.
 
 The eCH-0196 XSD is not redistributed here. For XSD validation, download it from
 <https://www.ech.ch/de/ech/ech-0196/2.2.0> and place it at
-`documentation/eCH-0196-2-2.xsd` (validation is skipped if it or `lxml` is
-absent).
+`documentation/eCH-0196-2-2.xsd` beside `convert.py` or the Windows executable.
+The converter also searches `documentation` in the current working directory,
+after the application directory. Include the imported eCH schemas with local
+`schemaLocation` references. Validation is explicitly skipped if the main XSD
+or `lxml` is absent.
 
 ## Usage
 
@@ -77,18 +83,78 @@ python convert.py data/Tax.xml output.xml --eur-chf-rate 0.9311 \
 Import `output_barcode.pdf` into your tax application via *"Steuerausweis
 importieren"*.
 
+The year-end rate override affects holdings only. Dividends, withholding,
+cash interest and debt interest retain their payment-date FX rates. CHF amounts
+need no conversion-rate rows.
+
 ### Getting the input from IBKR
 
 In IBKR Client Portal, create a **FlexQuery** covering the tax year with Open
-Positions, Trades, Cash Transactions and Conversion Rates, run it, and save the
-XML as `data/Tax.xml`. Dates in the export are `DD/MM/YYYY`; the base currency is
+Positions, Cash Transactions, **Change in Dividend Accruals**, and Conversion
+Rates, run it, and save the XML as `data/Tax.xml`. Trades may be included but are
+not used to infer dividend entitlement. Dates in the export are `DD/MM/YYYY`; the base currency is
 assumed to be EUR. The converter derives the tax period from the FlexStatement
-dates and rejects partial-year exports.
+dates and rejects partial-year exports. Export **one account in one
+FlexStatement per file**; multi-statement exports are rejected rather than
+silently omitting accounts.
+
+### Historical dividend quantities
+
+Enable **ISIN, Currency, Quantity, Ex Date, Pay Date, Gross Amount**, and the
+account/contract/model/action identifiers in Change in Dividend Accruals.
+Include the corresponding identifiers and Ex Date in Cash Transactions when
+available. IBKR defines the accrual quantity as the quantity held before ex-date;
+that quantity and ex-date are preserved for payouts and linked adjustments,
+including securities sold before year-end.
+
+Accrual postings and reversals are metadata, not additional income. Consistent
+records are used once; conflicting records, mismatched gross amounts, missing
+entitlements and unlinked adjustments stop conversion with an error, before
+writing output. Refunds and dividend reversals need an action ID or ex-date
+link to their entitlement. Separate same-day events remain separate when their
+identifiers differ. A split dividend/payment-in-lieu event is accepted only
+when its combined gross amount matches one unambiguous accrual.
+
+No closing-quantity, zero-quantity or trade-history fallback is used. Older
+exports must be regenerated with the required metadata; non-positive accrual
+quantities and unresolved corrections require manual reconciliation.
+The anonymized `data/Tax.xml` sample has no security dividend payments and
+therefore needs no accrual rows. To exercise historical dividend quantities,
+use the synthetic example `tests/fixtures/dividend_accruals.xml`:
+
+```bash
+python convert.py tests/fixtures/dividend_accruals.xml output.xml
+```
+
+### Withholding tax and DA-1
+
+Foreign withholding is recorded, but the FlexQuery does not establish the
+treaty-limited, non-recoverable amount or your DA-1 eligibility. The converter
+warns when manual confirmation is needed: it does not set the DA-1 eligibility
+flag or per-payment non-recoverable amount, and the required
+`totalNonRecoverableTax` subtotal remains zero (no credit claimed). Confirm and
+enter the eligible amount in your tax application before filing. Foreign tax
+must not be interpreted as a Swiss `withHoldingTaxClaim`.
+
+Bank-account payments have no foreign-tax amount field in eCH-0196. Foreign tax
+on cash interest is therefore preserved in XML payment annotations, with a
+warning, rather than included in Swiss claims or securities-tax totals.
+
+Withholding refunds are signed adjustments, converted on their own booking
+dates; they reduce the corresponding tax totals. Payments in different
+currencies remain separate, but Swiss income classification uses same-day
+withholding debits regardless of currency; refunds alone do not reclassify new
+positive income. Unmatched Swiss withholding produces a
+warning to confirm the income's A/B classification manually.
+Multiple holdings with the same ISIN are
+consolidated in the first listing's currency so their combined value is retained
+and dividend income is reported only once.
 
 ## How it works
 
 ```
 src/parse_ibkr.py           # FlexQuery XML → dataclasses
+src/dividend_entitlements.py # Match cash payments to historical accrual metadata
 src/generate_ech196.py      # dataclasses → eCH-0196 XML tree (+ XSD validation)
 src/generate_barcode_pdf.py # eCH-0196 XML → eCH-0270 barcode PDF
 convert.py                  # CLI: parse → build → validate → write [→ PDF]
@@ -111,7 +177,7 @@ python -m pytest
 
 The suite covers parsing, FX→CHF conversion, eCH-0196 generation, an end-to-end
 XSD validation, and barcode round-trip/structure (the barcode tests self-skip if
-their optional decode dependencies are absent).
+their optional decode dependencies are absent). CI exercises Python 3.11 and 3.12.
 
 ## Release build
 
