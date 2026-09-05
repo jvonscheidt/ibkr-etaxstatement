@@ -30,7 +30,7 @@ from xml.parsers.expat import ExpatError
 from src.generate_ech196 import build, serialize
 from src.parse_ibkr import parse
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 XSD_URL = "https://www.ech.ch/xmlns/eCH-0196/2.2/eCH-0196-2-2.xsd"
 XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema"
