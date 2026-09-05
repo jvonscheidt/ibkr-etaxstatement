@@ -20,7 +20,7 @@ from pathlib import Path
 from src.generate_ech196 import build, serialize
 from src.parse_ibkr import parse
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 
 def _find_xsd() -> Path | None:
