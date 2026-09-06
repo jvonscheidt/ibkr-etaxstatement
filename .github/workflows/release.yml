@@ -1,68 +1,121 @@
 name: Publish Release
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      release-tag:
-        description: Existing GitHub release tag to publish to WinGet
-        required: true
-        type: string
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: read
 
 concurrency:
-  group: winget-${{ github.event.release.tag_name || inputs.release-tag }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  publish-winget:
-    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+  preflight:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require a main-branch commit and matching versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          python .github/scripts/prepare_release.py --tag "$RELEASE_TAG"
+
+  ci:
+    needs: preflight
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: ci
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - run: pip install -r requirements-build.txt
+      - run: python -m PyInstaller --noconfirm --clean ibkr-etaxstatement.spec
+      - name: Check executable and generate release manifests
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $actual = & .\dist\ibkr-etaxstatement.exe --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $version) {
+            throw "Executable version mismatch: $actual"
+          }
+          python .github\scripts\prepare_release.py --tag $env:RELEASE_TAG --installer dist\ibkr-etaxstatement.exe --output dist\release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate WinGet manifests
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+            Repair-WinGetPackageManager -AllUsers
+            $env:PATH += ";$env:LOCALAPPDATA\Microsoft\WindowsApps"
+          }
+          winget validate --manifest dist\release\winget --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/release/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: release
+      - name: Publish immutable release assets
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_ASSET_DIR: ${{ github.workspace }}/release
+        with:
+          script: |
+            const publish = require('./.github/scripts/publish-release.js')
+            await publish({ github, context })
+
+  publish-winget:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: release
       - name: Check publishing credentials
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:WINGET_TOKEN)) {
-            Write-Output "::error::Configure the WINGET_TOKEN repository secret."
-            exit 1
+            throw "Configure the WINGET_TOKEN repository secret."
           }
-      - name: Check existing WinGet package
-        id: package
-        shell: pwsh
-        run: |
-          $uri = "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/j/jvonscheidt/ibkr-etaxstatement"
-          try {
-            Invoke-RestMethod -Uri $uri | Out-Null
-            "exists=true" >> $env:GITHUB_OUTPUT
-          } catch {
-            if ($_.Exception.Response.StatusCode -ne [Net.HttpStatusCode]::NotFound) {
-              throw
-            }
-            "exists=false" >> $env:GITHUB_OUTPUT
-          }
-      - name: Check out initial manifests
-        if: steps.package.outputs.exists == 'false'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Submit initial WinGet manifest
-        if: steps.package.outputs.exists == 'false'
+      - name: Submit WinGet manifests
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release-tag }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          WINGET_MANIFEST_DIR: ${{ github.workspace }}/release/winget
         with:
           github-token: ${{ secrets.WINGET_TOKEN }}
           script: |
             const submit = require('./.github/scripts/submit-initial-winget.js')
             await submit({ github, context, core })
-      - name: Publish WinGet update
-        if: steps.package.outputs.exists == 'true'
-        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5 # v2
-        with:
-          identifier: jvonscheidt.ibkr-etaxstatement
-          installers-regex: '\.exe$'
-          release-tag: ${{ github.event.release.tag_name || inputs.release-tag }}
-          token: ${{ secrets.WINGET_TOKEN }}
