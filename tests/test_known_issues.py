@@ -1,17 +1,15 @@
-"""Regression tests for defects flagged in code review and since fixed.
-
-Both bugs are now fixed; these tests guard against regressions.
-"""
+"""Regression tests for defects flagged in code review and since fixed."""
 
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
 from src.generate_ech196 import NS, _build_security_payments, serialize
-from src.parse_ibkr import CashTransaction, parse
+from src.parse_ibkr import CashTransaction, DividendAccrual, parse
 
 from .conftest import XSD_PATH
 
@@ -23,7 +21,7 @@ def _q(tag: str) -> str:
 def test_withholding_tax_not_double_counted():
     # Bug #1 (fixed): WHT must be matched to the income on its own date, not
     # summed across all dates and re-emitted on every payment.
-    sec_el = ET.Element(_q("security"))
+    sec_el = ET.Element(_q("security"), country="CH")
     income = [
         CashTransaction(date(2025, 3, 1), "CHF", 1.0, 100.0, "Dividends", "", "X", "S"),
         CashTransaction(date(2025, 9, 1), "CHF", 1.0, 100.0, "Dividends", "", "X", "S"),
@@ -33,29 +31,29 @@ def test_withholding_tax_not_double_counted():
             date(2025, 3, 1), "CHF", 1.0, -35.0, "Withholding Tax", "", "X", "S"
         )
     ]
-    # CHF payments convert 1:1, but _fx_to_chf still needs a CHF->EUR rate row.
-    fx = {
-        (date(2025, 3, 1), "CHF", "EUR"): 1.07,
-        (date(2025, 9, 1), "CHF", "EUR"): 1.07,
-    }
-
-    rev_b, wht_total = _build_security_payments(
-        sec_el, income, wht, fx_rates=fx, quantity=10.0
-    )
+    accruals = [
+        DividendAccrual(
+            "X", "CHF", date(2025, 2, 20), date(2025, 3, 1), Decimal(10), Decimal(100)
+        ),
+        DividendAccrual(
+            "X", "CHF", date(2025, 8, 20), date(2025, 9, 1), Decimal(10), Decimal(100)
+        ),
+    ]
+    _build_security_payments(sec_el, income, wht, fx_rates={}, accruals=accruals)
 
     claim_in_xml = sum(
         float(p.get("withHoldingTaxClaim", "0")) for p in sec_el.findall(_q("payment"))
     )
     # Only 35.00 CHF was actually withheld; it must not appear twice.
     assert claim_in_xml == pytest.approx(35.0)
-    # The returned totals feed the section/root aggregates and must match.
-    assert wht_total == pytest.approx(35.0)
-    assert rev_b == pytest.approx(200.0)
+    payments = sec_el.findall(_q("payment"))
+    assert sum(float(p.get("grossRevenueA")) for p in payments) == 100
+    assert sum(float(p.get("grossRevenueB")) for p in payments) == 100
 
 
-def test_dividend_wht_aggregates_into_root_totals(tmp_path):
+def test_dividend_wht_aggregates_into_correct_totals():
     # Bug #2 (fixed), end to end: a distributing security's dividend and its
-    # foreign WHT must appear in the security payment AND in the root totals.
+    # foreign WHT belongs in securities totals, not the root's Swiss claim.
     from datetime import date as _date
 
     from src.generate_ech196 import build
@@ -95,14 +93,18 @@ def test_dividend_wht_aggregates_into_root_totals(tmp_path):
         (_date(2025, 6, 15), "USD", "EUR"): 0.86,
     }
     acct = AccountInfo("U1", "A B", "A", "B", "ZH", "EUR", "IBKR")
-    root = build(IBKRData(acct, [pos], [div, wht], fx))
+    accrual = DividendAccrual(
+        isin, "USD", _date(2025, 6, 1), _date(2025, 6, 15), Decimal(8), Decimal(40)
+    )
+    root = build(IBKRData(acct, [pos], [div, wht], fx, dividend_accruals=[accrual]))
 
     # Root totals must be non-zero and equal the securities-section subtotals.
     assert float(root.get("totalGrossRevenueB")) > 0
-    assert float(root.get("totalWithHoldingTaxClaim")) > 0
+    assert root.get("totalWithHoldingTaxClaim") == "0.00"
     sec = root.find(f"{_q('listOfSecurities')}")
     assert root.get("totalGrossRevenueB") == sec.get("totalGrossRevenueB")
     assert root.get("totalWithHoldingTaxClaim") == sec.get("totalWithHoldingTaxClaim")
+    assert float(sec.get("totalLumpSumTaxCredit")) > 0
 
 
 def test_dividends_are_parsed(tmp_path):
@@ -157,6 +159,11 @@ def test_income_from_security_sold_before_year_end_is_reported():
         },
         period_from=date(2025, 1, 1),
         period_to=date(2025, 12, 31),
+        dividend_accruals=[
+            DividendAccrual(
+                isin, "USD", date(2025, 5, 1), pay_date, Decimal("12.5"), Decimal(10)
+            )
+        ],
     )
 
     root = build(data)
@@ -166,8 +173,10 @@ def test_income_from_security_sold_before_year_end_is_reported():
     assert security.get("isin") == isin
     assert security.find(_q("taxValue")) is None
     payment = security.find(_q("payment"))
+    assert payment.get("quantity") == "12.5"
     assert float(payment.get("grossRevenueB")) > 0
-    assert float(payment.get("withHoldingTaxClaim")) > 0
+    assert payment.get("withHoldingTaxClaim") == "0.00"
+    assert float(payment.get("lumpSumTaxCreditAmount")) > 0
     securities = root.find(_q("listOfSecurities"))
     assert root.get("totalGrossRevenueB") == securities.get("totalGrossRevenueB")
     assert root.get("totalWithHoldingTaxClaim") == securities.get(

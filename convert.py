@@ -14,12 +14,18 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from pathlib import Path
+from xml.dom import minidom
+from xml.parsers.expat import ExpatError
 
 from src.generate_ech196 import build, serialize
 from src.parse_ibkr import parse
@@ -27,35 +33,110 @@ from src.parse_ibkr import parse
 __version__ = "0.2.0"
 
 XSD_URL = "https://www.ech.ch/xmlns/eCH-0196/2.2/eCH-0196-2-2.xsd"
-XSD_PATH = Path(__file__).resolve().parent / "documentation" / "eCH-0196-2-2.xsd"
+XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema"
+
+
+def _schema_references(document: minidom.Document) -> Iterator[minidom.Element]:
+    for tag in ("import", "include", "redefine"):
+        yield from document.getElementsByTagNameNS(XSD_NAMESPACE, tag)
 
 
 def _download_xsd() -> None:
     print("Downloading latest eCH-0196 XSD...")
-    temp_path: Path | None = None
+    xsd_path = _find_xsd() or (
+        _application_dir() / "documentation" / "eCH-0196-2-2.xsd"
+    )
     try:
-        with urllib.request.urlopen(XSD_URL, timeout=30) as response:
-            content = response.read()
+        sources = {xsd_path.name: XSD_URL}
+        pending = [xsd_path.name]
+        schemas: dict[str, bytes] = {}
+        while pending:
+            name = pending.pop()
+            if name in schemas:
+                continue
+            with urllib.request.urlopen(sources[name], timeout=30) as response:
+                content = response.read()
+            document = minidom.parseString(content)
+            root = document.documentElement
+            if root.namespaceURI != XSD_NAMESPACE or root.localName != "schema":
+                raise ValueError("download is not an XML Schema")
+            changed = False
+            for reference in _schema_references(document):
+                location = reference.getAttribute("schemaLocation")
+                if not location:
+                    continue
+                url = urllib.parse.urlsplit(
+                    urllib.parse.urljoin(sources[name], location)
+                )
+                if url.scheme not in {"http", "https"} or url.netloc not in {
+                    "www.ech.ch",
+                    "ech.ch",
+                }:
+                    raise ValueError("schema dependency is not an official eCH URL")
+                url = url._replace(scheme="https")
+                dependency = url.path.rsplit("/", 1)[-1]
+                if not dependency.endswith(".xsd"):
+                    raise ValueError("schema dependency has no XSD filename")
+                source = url.geturl()
+                if dependency in sources and sources[dependency] != source:
+                    raise ValueError("schema dependencies have conflicting filenames")
+                sources[dependency] = source
+                if dependency not in schemas:
+                    pending.append(dependency)
+                reference.setAttribute("schemaLocation", dependency)
+                changed = True
+            # DOM serialization retains namespace declarations used in QName values.
+            schemas[name] = document.toxml(encoding="utf-8") if changed else content
 
-        root = ET.fromstring(content)
-        if root.tag != "{http://www.w3.org/2001/XMLSchema}schema":
-            raise ValueError("download is not an XML Schema")
-
-        XSD_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="wb", dir=XSD_PATH.parent, delete=False
-        ) as temp_file:
-            temp_file.write(content)
-            temp_path = Path(temp_file.name)
-        os.replace(temp_path, XSD_PATH)
-        print(f"XSD updated: {XSD_PATH}")
-    except (OSError, urllib.error.URLError, ET.ParseError, ValueError) as exc:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
-        if XSD_PATH.exists():
+        xsd_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=xsd_path.parent) as directory:
+            staging = Path(directory)
+            generation = xsd_path.parent / f"ech-schemas-{uuid.uuid4().hex}"
+            for name, content in schemas.items():
+                if len(schemas) > 1:
+                    document = minidom.parseString(content)
+                    for reference in _schema_references(document):
+                        location = reference.getAttribute("schemaLocation")
+                        if not location:
+                            continue
+                        if name == xsd_path.name and location != xsd_path.name:
+                            reference.setAttribute(
+                                "schemaLocation", f"{generation.name}/{location}"
+                            )
+                        elif name != xsd_path.name and location == xsd_path.name:
+                            reference.setAttribute("schemaLocation", f"../{location}")
+                    content = document.toxml(encoding="utf-8")
+                (staging / name).write_bytes(content)
+            if len(schemas) == 1:
+                os.replace(staging / xsd_path.name, xsd_path)
+            else:
+                # Keep dependencies isolated; replacing the root switches the cache.
+                os.replace(staging, generation)
+                try:
+                    os.replace(generation / xsd_path.name, xsd_path)
+                except OSError:
+                    shutil.rmtree(generation)
+                    raise
+        print(f"XSD updated: {xsd_path}")
+    except (OSError, urllib.error.URLError, ExpatError, ValueError) as exc:
+        if xsd_path.exists():
             print(f"Warning: XSD download failed ({exc}); using cached copy.")
         else:
             print(f"Warning: XSD download failed ({exc}); validation will be skipped.")
+
+
+def _application_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _find_xsd() -> Path | None:
+    for directory in (_application_dir(), Path.cwd()):
+        path = directory / "documentation" / "eCH-0196-2-2.xsd"
+        if path.is_file():
+            return path
+    return None
 
 
 def _validate(root: ET.Element) -> bool:
@@ -65,12 +146,16 @@ def _validate(root: ET.Element) -> bool:
         print("lxml not installed — skipping XSD validation (pip install lxml)")
         return True
 
-    if not XSD_PATH.exists():
-        print("XSD not found at documentation/eCH-0196-2-2.xsd — skipping validation")
+    xsd_path = _find_xsd()
+    if xsd_path is None:
+        print(
+            "XSD not found in documentation beside the application or in the "
+            "working directory — skipping validation"
+        )
         print("Download from: https://www.ech.ch/de/ech/ech-0196/2.2.0")
         return True
 
-    schema = lxml_et.XMLSchema(lxml_et.parse(str(XSD_PATH)))
+    schema = lxml_et.XMLSchema(lxml_et.parse(str(xsd_path)))
     xml_str = serialize(root)
     doc = lxml_et.fromstring(xml_str.encode())
     if schema.validate(doc):
@@ -113,7 +198,11 @@ def main() -> int:
     _download_xsd()
 
     print(f"Parsing {input_path}...")
-    data = parse(str(input_path))
+    try:
+        data = parse(str(input_path))
+    except (ValueError, ET.ParseError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     print(f"Account:   {data.account.name} ({data.account.account_id})")
     print(f"Canton:    {data.account.canton}")
@@ -121,7 +210,11 @@ def main() -> int:
     print(f"Cash txns: {len(data.cash_transactions)}")
 
     print("Generating eCH-196 XML...")
-    root = build(data, eur_chf_override=args.eur_chf_rate)
+    try:
+        root = build(data, eur_chf_override=args.eur_chf_rate)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     if not _validate(root):
         print(

@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import math
 import re
 import warnings
 import xml.etree.ElementTree as ET
-from dataclasses import replace
+from collections.abc import Iterable
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from .parse_ibkr import CashTransaction, IBKRData, OpenPosition
+from .dividend_entitlements import (
+    DIVIDEND_TYPES,
+    PaymentKey,
+    match_entitlement,
+    payment_key,
+)
+from .parse_ibkr import CashTransaction, DividendAccrual, IBKRData, OpenPosition
 
 NS = "http://www.ech.ch/xmlns/eCH-0196/2"
 NS_XSI = "http://www.w3.org/2001/XMLSchema-instance"
@@ -31,17 +38,29 @@ MINOR_VERSION = "22"
 # the eCH-0270 barcode's Code 128 payload (imported by generate_barcode_pdf).
 IBKR_CLEARING_NUMBER = "89095"
 
-# IBKR cash-transaction types that represent per-security (dividend) income.
-DIVIDEND_TYPES = {"Dividends", "Payment In Lieu Of Dividends"}
-
 
 def _q(tag: str) -> str:
     return f"{{{NS}}}{tag}"
 
 
-def _chf(value: float) -> str:
+def _chf(value: float | Decimal) -> str:
     """Round to 2 decimal places and format as string."""
     return str(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _quantity(value: float | Decimal) -> str:
+    """Preserve fractional units and avoid exponents, which XSD decimals forbid."""
+    return format(Decimal(str(value)), "f")
+
+
+def _total(elements: Iterable[ET.Element], attribute: str) -> str:
+    return _chf(sum((Decimal(el.get(attribute, "0")) for el in elements), Decimal(0)))
+
+
+def _security_country(isin: str, issuer_country: str) -> str:
+    if issuer_country:
+        return issuer_country.upper()
+    return isin[:2].upper() if len(isin) >= 2 and isin[:2].isalpha() else "XX"
 
 
 def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> float:
@@ -52,6 +71,8 @@ def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> float:
     CHF→EUR rate gives us EUR→CHF = 1/(CHF→EUR).
     For any other currency: currency→CHF = (currency→EUR) / (CHF→EUR).
     """
+    if currency == "CHF":
+        return 1.0
 
     # Find the closest available rate on or before ref_date
     def _rate(from_c: str, to_c: str) -> float | None:
@@ -69,8 +90,6 @@ def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> float:
     if chf_eur is None or chf_eur == 0:
         raise ValueError(f"No CHF→EUR rate found near {ref_date}")
 
-    if currency == "CHF":
-        return 1.0
     if currency == "EUR":
         return 1.0 / chf_eur
 
@@ -146,13 +165,9 @@ def _statement_period(data: IBKRData) -> tuple[date, date]:
 
 
 def _build_securities(
-    data: IBKRData, year_end: date
-) -> tuple[ET.Element, float, float, float]:
-    """Build <listOfSecurities>.
-
-    Returns (element, total_tax_value_chf, total_gross_revenue_b_chf,
-    total_withholding_tax_claim_chf).
-    """
+    data: IBKRData, year_end: date, valuation_fx_rates: dict
+) -> ET.Element:
+    """Build holdings and income once per ISIN, including closed securities."""
     list_el = ET.Element(_q("listOfSecurities"))
     depot_el = ET.SubElement(list_el, _q("depot"), depotNumber=data.account.account_id)
 
@@ -168,17 +183,31 @@ def _build_securities(
         elif tx.tx_type == "Withholding Tax":
             wht_by_isin.setdefault(tx.isin, []).append(tx)
 
-    total_chf = 0.0
-    total_rev_b = 0.0
-    total_wht = 0.0
-    for idx, pos in enumerate(data.positions, start=1):
-        rate = _fx_to_chf(pos.currency, year_end, data.fx_rates)
-        chf_value = round(pos.position_value * rate, 2)
-        total_chf += chf_value
+    positions_by_isin: dict[str, list[OpenPosition]] = {}
+    for pos in data.positions:
+        positions_by_isin.setdefault(pos.isin, []).append(pos)
+
+    for idx, positions in enumerate(positions_by_isin.values(), start=1):
+        pos = positions[0]
+        rate = _fx_to_chf(pos.currency, year_end, valuation_fx_rates)
+        quantity = sum((Decimal(str(p.quantity)) for p in positions), Decimal(0))
+        # Express multiple listings in the first listing's currency, preserving
+        # their combined CHF value rather than duplicating their cash flows.
+        balance = sum(
+            (
+                p.position_value
+                if p.currency == pos.currency
+                else p.position_value
+                * _fx_to_chf(p.currency, year_end, valuation_fx_rates)
+                / rate
+            )
+            for p in positions
+        )
+        chf_value = round(balance * rate, 2)
 
         sec_attrs = {
             "positionId": str(idx),
-            "country": pos.issuer_country_code or "XX",
+            "country": _security_country(pos.isin, pos.issuer_country_code),
             "currency": pos.currency,
             "quotationType": "PIECE",
             "securityCategory": _security_category(pos),
@@ -191,40 +220,39 @@ def _build_securities(
             sec_attrs["securityType"] = sec_type
         sec_el = ET.SubElement(depot_el, _q("security"), **sec_attrs)
 
-        ET.SubElement(
+        tax_value = ET.SubElement(
             sec_el,
             _q("taxValue"),
             referenceDate=year_end.isoformat(),
             quotationType="PIECE",
-            quantity=_chf(pos.quantity),
+            quantity=_quantity(quantity),
             balanceCurrency=pos.currency,
-            unitPrice=_chf(pos.mark_price),
-            balance=_chf(pos.position_value),
+            balance=_chf(balance),
             exchangeRate=str(round(rate, 6)),
             value=_chf(chf_value),
         )
+        if len(positions) == 1:
+            tax_value.set("unitPrice", _chf(pos.mark_price))
+        elif quantity:
+            tax_value.set("unitPrice", _chf(Decimal(str(balance)) / quantity))
 
         # Payments linked to this security
         income_txs = income_by_isin.get(pos.isin, [])
         wht_txs = wht_by_isin.get(pos.isin, [])
-        rev_b, wht = _build_security_payments(
-            sec_el, income_txs, wht_txs, data.fx_rates, pos.quantity
+        _build_security_payments(
+            sec_el, income_txs, wht_txs, data.fx_rates, data.dividend_accruals
         )
-        total_rev_b += rev_b
-        total_wht += wht
 
     # A security sold during the year is absent from OpenPositions but its
     # dividend and withholding-tax entries still belong in the annual return.
-    open_isins = {pos.isin for pos in data.positions}
+    open_isins = set(positions_by_isin)
     orphan_isins = sorted((set(income_by_isin) | set(wht_by_isin)) - open_isins)
-    for offset, isin in enumerate(orphan_isins, start=len(data.positions) + 1):
+    for offset, isin in enumerate(orphan_isins, start=len(positions_by_isin) + 1):
         income_txs = income_by_isin.get(isin, [])
         wht_txs = wht_by_isin.get(isin, [])
         txs = income_txs or wht_txs
         representative = txs[0]
-        country = representative.issuer_country_code
-        if not country:
-            country = isin[:2] if len(isin) >= 2 and isin[:2].isalpha() else "XX"
+        country = _security_country(isin, representative.issuer_country_code)
         category = _transaction_security_category(representative)
         sec_attrs = {
             "positionId": str(offset),
@@ -238,23 +266,25 @@ def _build_securities(
         if category == "FUND":
             sec_attrs["securityType"] = "FUND.DISTRIBUTION"
         sec_el = ET.SubElement(depot_el, _q("security"), **sec_attrs)
-        rev_b, wht = _build_security_payments(
-            sec_el, income_txs, wht_txs, data.fx_rates, quantity=0.0
+        _build_security_payments(
+            sec_el, income_txs, wht_txs, data.fx_rates, data.dividend_accruals
         )
-        total_rev_b += rev_b
-        total_wht += wht
 
-    list_el.set("totalTaxValue", _chf(total_chf))
-    list_el.set("totalGrossRevenueA", "0.00")
-    list_el.set("totalGrossRevenueB", _chf(total_rev_b))
-    list_el.set("totalWithHoldingTaxClaim", _chf(total_wht))
-    list_el.set("totalLumpSumTaxCredit", "0.00")
+    list_el.set("totalTaxValue", _total(list_el.iter(_q("taxValue")), "value"))
+    for total, payment_attribute in (
+        ("totalGrossRevenueA", "grossRevenueA"),
+        ("totalGrossRevenueB", "grossRevenueB"),
+        ("totalWithHoldingTaxClaim", "withHoldingTaxClaim"),
+        ("totalLumpSumTaxCredit", "lumpSumTaxCreditAmount"),
+    ):
+        list_el.set(total, _total(list_el.iter(_q("payment")), payment_attribute))
+    # Required subtotal: no treaty-limited DA-1 credit is inferred from cash data.
     list_el.set("totalNonRecoverableTax", "0.00")
     list_el.set("totalAdditionalWithHoldingTaxUSA", "0.00")
     list_el.set("totalGrossRevenueIUP", "0.00")
     list_el.set("totalGrossRevenueConversion", "0.00")
 
-    return list_el, total_chf, total_rev_b, total_wht
+    return list_el
 
 
 def _build_security_payments(
@@ -262,86 +292,85 @@ def _build_security_payments(
     income_txs: list[CashTransaction],
     wht_txs: list[CashTransaction],
     fx_rates: dict,
-    quantity: float,
-) -> tuple[float, float]:
-    """Emit <payment> elements for one security.
-
-    Returns (total_gross_revenue_b_chf, total_withholding_tax_claim_chf).
-    """
-    if not income_txs and not wht_txs:
-        return 0.0, 0.0
-
-    total_rev_b = 0.0
-    total_wht = 0.0
-
-    # Group income and WHT by settle_date; emit one payment per income event.
-    income_by_date: dict[date, list[CashTransaction]] = {}
+    accruals: list[DividendAccrual],
+) -> None:
+    """Emit currency-specific income and signed withholding adjustments."""
+    groups: dict[PaymentKey, list[CashTransaction]] = {}
+    for tx in income_txs + wht_txs:
+        groups.setdefault(payment_key(tx), []).append(tx)
+    entitlements = {
+        key: match_entitlement(txs, accruals) for key, txs in groups.items()
+    }
+    income: dict[PaymentKey, Decimal] = {}
     for tx in income_txs:
-        income_by_date.setdefault(tx.settle_date, []).append(tx)
+        key = payment_key(tx)
+        income[key] = income.get(key, Decimal(0)) + Decimal(str(tx.amount))
 
-    # Net WHT per date (negative amount = tax withheld). WHT is matched to the
-    # income booked on the *same* date — not summed across all dates — so a
-    # security paying on multiple dates does not double-count its DA-1 claim.
-    net_wht: dict[date, float] = {}
-    wht_currency: dict[date, str] = {}
+    withholding: dict[PaymentKey, Decimal] = {}
     for tx in wht_txs:
-        net_wht[tx.settle_date] = net_wht.get(tx.settle_date, 0.0) + tx.amount
-        wht_currency.setdefault(tx.settle_date, tx.currency)
+        key = payment_key(tx)
+        withholding[key] = withholding.get(key, Decimal(0)) - Decimal(str(tx.amount))
 
-    for pay_date, txs in sorted(income_by_date.items()):
-        gross_b = sum(t.amount for t in txs)
-        rate = _fx_to_chf(txs[0].currency, pay_date, fx_rates)
-        gross_b_chf = round(gross_b * rate, 2)
-        wht_chf = round(max(0.0, -net_wht.get(pay_date, 0.0)) * rate, 2)
-        total_rev_b += gross_b_chf
-        total_wht += wht_chf
+    swiss = sec_el.get("country") == "CH"
+    tax_dates = {key[0] for key, tax in withholding.items() if tax > 0}
+    refund_dates = {key[0] for key, tax in withholding.items() if tax < 0}
+    if swiss:
+        income_dates = {key[0] for key in income}
+        unmatched_dates = {
+            key[0]
+            for key, tax in withholding.items()
+            if tax > 0 and key[0] not in income_dates
+        }
+        if unmatched_dates:
+            warnings.warn(
+                f"Swiss withholding for {sec_el.get('isin', 'unknown security')} "
+                "has no same-day income; confirm the income's A/B classification "
+                "manually.",
+                stacklevel=2,
+            )
+    if not swiss and any(withholding.values()):
+        warnings.warn(
+            f"Foreign withholding for {sec_el.get('isin', 'unknown security')} "
+            "is recorded, but DA-1 eligibility and the non-recoverable amount "
+            "must be confirmed manually; no DA-1 entitlement is assumed.",
+            stacklevel=2,
+        )
 
-        ET.SubElement(
+    for key in sorted(income.keys() | withholding.keys()):
+        pay_date, currency = key[:2]
+        entitlement = entitlements[key]
+        gross = income.get(key, Decimal(0))
+        tax = withholding.get(key, Decimal(0))
+        rate = _fx_to_chf(currency, pay_date, fx_rates)
+        gross_chf = _chf(gross * Decimal(str(rate)))
+        tax_chf = _chf(tax * Decimal(str(rate)))
+        # Refunds can reverse A income, but do not move new positive income to A.
+        revenue_a = swiss and (
+            pay_date in tax_dates or (gross < 0 and pay_date in refund_dates)
+        )
+
+        payment = ET.SubElement(
             sec_el,
             _q("payment"),
             paymentDate=pay_date.isoformat(),
+            exDate=entitlement.ex_date.isoformat(),
             quotationType="PIECE",
-            quantity=_chf(quantity),
-            amountCurrency=txs[0].currency,
-            amount=_chf(gross_b),
+            quantity=_quantity(entitlement.quantity),
+            amountCurrency=currency,
+            amount=_chf(gross),
             exchangeRate=str(round(rate, 6)),
-            grossRevenueA="0.00",
-            grossRevenueB=_chf(gross_b_chf),
-            withHoldingTaxClaim=_chf(wht_chf),
+            grossRevenueA=gross_chf if revenue_a else "0.00",
+            grossRevenueB="0.00" if revenue_a else gross_chf,
+            withHoldingTaxClaim=tax_chf if swiss else "0.00",
         )
-
-    # WHT withheld on dates with no matching income (e.g. adjustments) would
-    # otherwise be dropped — emit each as a standalone reclaim so no DA-1
-    # credit is lost.
-    for wht_date in sorted(net_wht):
-        if wht_date in income_by_date or net_wht[wht_date] >= 0:
-            continue
-        ccy = wht_currency[wht_date]
-        rate = _fx_to_chf(ccy, wht_date, fx_rates)
-        wht_chf = round(-net_wht[wht_date] * rate, 2)
-        total_wht += wht_chf
-        ET.SubElement(
-            sec_el,
-            _q("payment"),
-            paymentDate=wht_date.isoformat(),
-            quotationType="PIECE",
-            quantity=_chf(quantity),
-            amountCurrency=ccy,
-            amount="0.00",
-            exchangeRate=str(round(rate, 6)),
-            grossRevenueA="0.00",
-            grossRevenueB="0.00",
-            withHoldingTaxClaim=_chf(wht_chf),
-        )
-
-    return total_rev_b, total_wht
+        if not swiss and tax:
+            payment.set("lumpSumTaxCreditAmount", tax_chf)
+        if key not in income:
+            payment.set("name", "Withholding tax adjustment")
 
 
-def _build_bank_accounts(data: IBKRData) -> tuple[ET.Element, float, float, float]:
-    """
-    Build <listOfBankAccounts> from cash interest / WHT transactions.
-    Returns (element, total_revenue_b, total_wht, total_tax_value).
-    """
+def _build_bank_accounts(data: IBKRData) -> ET.Element:
+    """Build cash income, retaining foreign withholding as payment annotations."""
     # Group by currency
     income_by_ccy: dict[str, list[CashTransaction]] = {}
     wht_by_ccy: dict[str, list[CashTransaction]] = {}
@@ -355,8 +384,6 @@ def _build_bank_accounts(data: IBKRData) -> tuple[ET.Element, float, float, floa
             wht_by_ccy.setdefault(tx.currency, []).append(tx)
 
     list_el = ET.Element(_q("listOfBankAccounts"))
-    total_rev_b = 0.0
-    total_wht = 0.0
 
     for ccy in sorted(set(list(income_by_ccy) + list(wht_by_ccy))):
         income_txs = income_by_ccy.get(ccy, [])
@@ -364,7 +391,6 @@ def _build_bank_accounts(data: IBKRData) -> tuple[ET.Element, float, float, floa
 
         # Net amounts in CHF
         acct_rev_b = 0.0
-        acct_wht = 0.0
 
         ba_el = ET.SubElement(
             list_el,
@@ -395,52 +421,41 @@ def _build_bank_accounts(data: IBKRData) -> tuple[ET.Element, float, float, floa
                 withHoldingTaxClaim="0.00",
             )
 
-        # Convert each withholding transaction on its own date before netting.
-        # Rates can vary substantially over a tax year.
-        net_wht_ccy = sum(tx.amount for tx in wht_txs)
-        net_wht_chf = sum(
-            round(
-                tx.amount * _fx_to_chf(ccy, tx.settle_date, data.fx_rates),
-                2,
+        # Bank-account payments have no foreign-tax amount field in eCH-0196.
+        # Keep the signed amount in the supported name field, not a Swiss claim.
+        if wht_txs:
+            warnings.warn(
+                f"Foreign withholding on IBKR {ccy} cash is recorded in payment "
+                "annotations only; bank accounts have no foreign-tax field. "
+                "DA-1 eligibility must be confirmed manually.",
+                stacklevel=2,
             )
-            for tx in wht_txs
-        )
-        if net_wht_chf < -0.005:
-            wht_chf = round(-net_wht_chf, 2)
-            acct_wht += wht_chf
-            if income_txs:
-                pay_date = max(income_txs, key=lambda t: t.settle_date).settle_date
-            else:
-                pay_date = max(wht_txs, key=lambda t: t.settle_date).settle_date
-            if net_wht_ccy < -0.005:
-                amount_currency = ccy
-                effective_rate = wht_chf / -net_wht_ccy
-            else:
-                amount_currency = "CHF"
-                effective_rate = 1.0
+        for tx in sorted(wht_txs, key=lambda t: t.settle_date):
+            rate = _fx_to_chf(ccy, tx.settle_date, data.fx_rates)
+            tax = -Decimal(str(tx.amount))
+            tax_chf = _chf(tax * Decimal(str(rate)))
             ET.SubElement(
                 ba_el,
                 _q("payment"),
-                paymentDate=pay_date.isoformat(),
-                amountCurrency=amount_currency,
+                paymentDate=tx.settle_date.isoformat(),
+                name=f"Foreign withholding tax: {_chf(tax)} {ccy} ({tax_chf} CHF); "
+                "DA-1 eligibility not determined",
+                amountCurrency=ccy,
                 amount="0.00",
-                exchangeRate=str(round(effective_rate, 6)),
+                exchangeRate=str(round(rate, 6)),
                 grossRevenueA="0.00",
                 grossRevenueB="0.00",
-                withHoldingTaxClaim=_chf(wht_chf),
+                withHoldingTaxClaim="0.00",
             )
 
         ba_el.set("totalGrossRevenueB", _chf(acct_rev_b))
-        ba_el.set("totalWithHoldingTaxClaim", _chf(acct_wht))
-        total_rev_b += acct_rev_b
-        total_wht += acct_wht
 
     list_el.set("totalTaxValue", "0.00")
     list_el.set("totalGrossRevenueA", "0.00")
-    list_el.set("totalGrossRevenueB", _chf(total_rev_b))
-    list_el.set("totalWithHoldingTaxClaim", _chf(total_wht))
+    list_el.set("totalGrossRevenueB", _total(list_el, "totalGrossRevenueB"))
+    list_el.set("totalWithHoldingTaxClaim", "0.00")
 
-    return list_el, total_rev_b, total_wht, 0.0
+    return list_el
 
 
 def _build_liabilities(data: IBKRData) -> ET.Element:
@@ -510,19 +525,18 @@ def build(data: IBKRData, eur_chf_override: float | None = None) -> ET.Element:
     period_from, year_end = _statement_period(data)
     tax_period = str(year_end.year)
 
+    valuation_fx_rates = data.fx_rates
     if eur_chf_override is not None:
+        if not math.isfinite(eur_chf_override) or eur_chf_override <= 0:
+            raise ValueError("EUR-to-CHF valuation rate must be finite and positive")
         # Inject a synthetic CHF→EUR rate for the statement year-end.
         chf_eur = 1.0 / eur_chf_override
-        fx_rates = dict(data.fx_rates)
-        fx_rates[(year_end, "CHF", "EUR")] = chf_eur
-        data = replace(data, fx_rates=fx_rates)
+        valuation_fx_rates = dict(data.fx_rates)
+        valuation_fx_rates[(year_end, "CHF", "EUR")] = chf_eur
 
-    sec_list, total_tax_value, sec_rev_b, sec_wht = _build_securities(data, year_end)
-    ba_list, ba_rev_b, ba_wht, _ = _build_bank_accounts(data)
+    sec_list = _build_securities(data, year_end, valuation_fx_rates)
+    ba_list = _build_bank_accounts(data)
     li_list = _build_liabilities(data)
-
-    total_rev_b = sec_rev_b + ba_rev_b
-    total_wht = sec_wht + ba_wht
 
     canton = data.account.canton
     creation_dt = datetime.now(UTC).astimezone().strftime("%Y-%m-%dT%H:%M:%S")
@@ -544,12 +558,15 @@ def build(data: IBKRData, eur_chf_override: float | None = None) -> ET.Element:
         "periodTo": year_end.isoformat(),
         "country": "CH",
         "canton": canton,
-        "totalTaxValue": _chf(total_tax_value),
-        "totalGrossRevenueA": "0.00",
-        "totalGrossRevenueB": _chf(total_rev_b),
-        "totalWithHoldingTaxClaim": _chf(total_wht),
         "minorVersion": MINOR_VERSION,
     }
+    for attribute in (
+        "totalTaxValue",
+        "totalGrossRevenueA",
+        "totalGrossRevenueB",
+        "totalWithHoldingTaxClaim",
+    ):
+        root_attrs[attribute] = _total((sec_list, ba_list), attribute)
     root = ET.Element(_q("taxStatement"), **root_attrs)
     root.set(f"{{{NS_XSI}}}schemaLocation", SCHEMA_LOCATION)
 

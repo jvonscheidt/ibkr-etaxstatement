@@ -251,11 +251,29 @@ def _draw_statement_pages(
             c.drawRightString(19.0 * cm, y, root.get("totalTaxValue", ""))
             y -= 0.5 * cm
             c.setFont("Helvetica", 8)
-            c.drawString(3 * cm, y, "Total Bruttoertrag B (DA-1) CHF")
-            c.drawRightString(19.0 * cm, y, root.get("totalGrossRevenueB", ""))
+            securities = root.find(_q("listOfSecurities"))
+            foreign_tax = (
+                securities.get("totalLumpSumTaxCredit", "0.00")
+                if securities is not None
+                else "0.00"
+            )
+            for label, value in (
+                ("Total Bruttoertrag A CHF", root.get("totalGrossRevenueA", "")),
+                ("Total Bruttoertrag B CHF", root.get("totalGrossRevenueB", "")),
+                (
+                    "Total Verrechnungssteueranspruch CHF",
+                    root.get("totalWithHoldingTaxClaim", ""),
+                ),
+                ("Ausländische Quellensteuer Wertschriften CHF", foreign_tax),
+            ):
+                c.drawString(3 * cm, y, label)
+                c.drawRightString(19.0 * cm, y, value)
+                y -= 0.45 * cm
+            c.drawString(3 * cm, y, "DA-1-Anspruch nicht ermittelt; manuell prüfen.")
             y -= 0.45 * cm
-            c.drawString(3 * cm, y, "Total anrechenbare Quellensteuer CHF")
-            c.drawRightString(19.0 * cm, y, root.get("totalWithHoldingTaxClaim", ""))
+            c.drawString(
+                3 * cm, y, "Quellensteuer auf Kontozinsen: siehe XML-Zahlungsnotizen."
+            )
 
         c.showPage()
         page_num += 1
