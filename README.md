@@ -208,6 +208,8 @@ The workflow runs the reusable CI workflow against the tagged source, builds a
 Windows x64 executable, checks its CLI version, generates manifests from
 `packaging/winget/templates`, and validates them with WinGet. The executable's
 SHA-256 is calculated from that exact build, not copied from an older release.
+The runner provisions the current stable WinGet client before validation;
+preinstalled runner versions may not recognize the manifest schema headers.
 It uploads the executable, `SHA256SUMS`, and three manifest files to a draft
 GitHub release, publishes it only after every asset upload succeeds, then opens
 the `microsoft/winget-pkgs` pull request in the same workflow. Building and
