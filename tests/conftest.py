@@ -2,18 +2,63 @@
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import replace
+from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from src.parse_ibkr import AccountInfo, CashTransaction, IBKRData, OpenPosition
+from src.parse_ibkr import (
+    AccountInfo,
+    CashTransaction,
+    DividendAccrual,
+    IBKRData,
+    OpenPosition,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TAX_XML = REPO_ROOT / "data" / "Tax.xml"
 XSD_PATH = REPO_ROOT / "documentation" / "eCH-0196-2-2.xsd"
+INCOME_XML = REPO_ROOT / "tests" / "fixtures" / "dividend_accruals.xml"
 
 YEAR_END = date(2025, 12, 31)
+
+
+def with_dividend_accruals(data: IBKRData) -> IBKRData:
+    """Supply explicit synthetic ten-share entitlements for accounting-only tests."""
+    groups = {}
+    for tx in data.cash_transactions:
+        if tx.isin:
+            groups.setdefault((tx.isin, tx.currency, tx.settle_date), []).append(tx)
+    accruals = []
+    transactions = []
+    for tx in data.cash_transactions:
+        transactions.append(
+            replace(tx, ex_date=tx.settle_date - timedelta(days=1)) if tx.isin else tx
+        )
+    for (isin, currency, day), txs in groups.items():
+        income = [
+            t for t in txs if t.tx_type in {"Dividends", "Payment In Lieu Of Dividends"}
+        ]
+        if not income and any(
+            t.isin == isin
+            and t.settle_date == day
+            and t.tx_type in {"Dividends", "Payment In Lieu Of Dividends"}
+            for t in data.cash_transactions
+        ):
+            continue
+        gross = (
+            sum((Decimal(str(t.amount)) for t in income), Decimal(0))
+            if income
+            else Decimal(100)
+        )
+        accruals.append(
+            DividendAccrual(
+                isin, currency, day - timedelta(days=1), day, Decimal(10), abs(gross)
+            )
+        )
+    return replace(data, cash_transactions=transactions, dividend_accruals=accruals)
 
 
 @pytest.fixture

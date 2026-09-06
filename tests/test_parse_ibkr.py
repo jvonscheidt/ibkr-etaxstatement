@@ -98,16 +98,24 @@ class TestParseRealFile:
     def test_cash_transactions_filtered_to_income_types(self, parsed):
         # Deposits/Withdrawals and "AF" must be excluded; only income types remain.
         types = {t.tx_type for t in parsed.cash_transactions}
-        assert types <= {
+        income_types = {
             "Withholding Tax",
             "Broker Interest Received",
             "Broker Interest Paid",
             "Dividends",
             "Payment In Lieu Of Dividends",
         }
+        source = ET.parse(TAX_XML)
+        expected = [
+            tx
+            for tx in source.findall(
+                "FlexStatements/FlexStatement/CashTransactions/CashTransaction"
+            )
+            if tx.get("type") in income_types
+        ]
+        assert types == {tx.get("type") for tx in expected}
+        assert len(parsed.cash_transactions) == len(expected)
         assert "Deposits/Withdrawals" not in types
-        # The sample holds distributing securities, so dividends must be captured.
-        assert "Dividends" in types
 
     def test_fx_rates_present(self, parsed):
         assert parsed.fx_rates[(date(2025, 12, 31), "CHF", "EUR")] == pytest.approx(
@@ -168,4 +176,21 @@ def test_invalid_cash_transaction_fields_are_rejected(
     path.write_text(xml, encoding="utf-8")
 
     with pytest.raises(ValueError, match=field):
+        parse(str(path))
+
+
+@pytest.mark.parametrize("second_account", ["U1", "U2"])
+def test_multiple_statements_are_rejected(tmp_path, second_account):
+    xml = f"""<FlexQueryResponse><FlexStatements>
+      <FlexStatement>
+        <AccountInformation accountId="U1" name="A B" currency="EUR"/>
+      </FlexStatement>
+      <FlexStatement>
+        <AccountInformation accountId="{second_account}" name="A B" currency="EUR"/>
+      </FlexStatement>
+    </FlexStatements></FlexQueryResponse>"""
+    path = tmp_path / "multiple.xml"
+    path.write_text(xml, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Multiple FlexStatements"):
         parse(str(path))

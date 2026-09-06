@@ -20,6 +20,8 @@ Key elements:
 - `<OpenPositions>/<OpenPosition levelOfDetail="SUMMARY">`: year-end holdings
 - `<Trades>/<Trade levelOfDetail="EXECUTION">`: executions
 - `<CashTransactions>/<CashTransaction>`: dividends, interest, withholding tax
+- `<ChangeInDividendAccruals>/<ChangeInDividendAccrual>`: historical dividend
+  entitlement quantity, ex-date, payment date and gross amount
 - `<ConversionRates>/<ConversionRate>`: daily currency-to-EUR rates
 
 Sample contains ETF positions (MEUD, EIMI, MEUS, XFFE), trades, and STK/ETF
@@ -72,15 +74,18 @@ ruff check .
 python -m pytest
 ```
 
-Startup downloads the latest official v2.2 XSD to
-`documentation/eCH-0196-2-2.xsd`. `documentation/` is git-ignored local
-scratch space. A failed download uses the cached XSD; missing `lxml` or XSD
-causes an explicit validation skip.
+Startup refreshes the official v2.2 XSD and its eCH dependencies, retaining
+namespace declarations and using local `schemaLocation` references. Validation
+searches `documentation/eCH-0196-2-2.xsd` beside the script or frozen executable
+first, then in the working directory. An existing cache is refreshed in place;
+otherwise the application directory is used. Failed downloads retain the cache.
+`documentation/` is git-ignored. Missing `lxml` or XSD causes explicit skip.
 
 ## Structure
 
 ```text
 src/parse_ibkr.py           Parse Tax.xml into dataclasses
+src/dividend_entitlements.py Match historical dividend entitlement metadata
 src/generate_ech196.py      Build eCH-0196 XML
 src/generate_barcode_pdf.py Build eCH-0270 PDF
 convert.py                  Parse, build, validate, write, optionally make PDF
@@ -139,6 +144,8 @@ file IDs fail in ZHPrivateTax with `"keine gültigen Daten"`.
 
 All conversion rates convert source currency to EUR.
 
+- CHF amounts are identity conversions and require no FX rows
+- Year-end overrides affect valuations only; never replace payment-date rates
 - EUR to CHF: `1 / (CHF-to-EUR rate)`
 - USD to CHF: `(USD-to-EUR rate) / (CHF-to-EUR rate)`
 - Sample Dec 31, 2025 rates: CHF to EUR `1.074`; USD to EUR `0.85135`
@@ -150,8 +157,28 @@ All conversion rates convert source currency to EUR.
   `exchangeRate`, `value`
 - `securityPaymentType`: `paymentDate`, `amountCurrency`, `amount`,
   `exchangeRate`, `grossRevenueA`, `grossRevenueB`, `withHoldingTaxClaim`
-- `grossRevenueA`: Swiss-source income with 35% Swiss WHT
-- `grossRevenueB`: foreign-source income for DA-1
+- `grossRevenueA` / `withHoldingTaxClaim`: income with a Swiss withholding
+  refund claim / Swiss withholding amount; never use these for foreign tax
+- `grossRevenueB`: income without a Swiss withholding refund claim
+- `lumpSumTaxCreditAmount`: foreign withholding, including signed refunds;
+  aggregate in securities `totalLumpSumTaxCredit`
+- Do not infer DA-1 entitlement from withholding alone. Warn for manual
+  confirmation, omit the eligibility flag and per-payment non-recoverable
+  amount, and leave required `totalNonRecoverableTax` at zero (no credit claimed)
+- Bank payments have no foreign-tax field: retain foreign cash-interest tax
+  in payment annotations and warn, not in Swiss withholding claims
+- Group security payments by date and currency; consolidate holdings by ISIN
+  so their income and tax are emitted only once
+- Reject inputs containing multiple FlexStatements; require one account/year
+  per input file
+- Parse quantities with Decimal and preserve fractional precision in XML
+- Security-payment quantities and ex-dates come from matching dividend accruals,
+  never year-end holdings or zero placeholders for sold securities
+- Require unambiguous entitlement metadata; fail on missing/conflicting records
+  or mismatched gross amounts. Refunds/reversals require an action ID or ex-date
+  link. Do not reconstruct entitlement from trades alone
+- Accrual Po/Re rows do not create income or extra shares; cash transactions
+  remain the income source
 - Account ETFs are accumulating: `securityCategory="FUND"` and
   `securityType="FUND.ACCUMULATION"`
 - Set fund accumulation/distribution type only for `FUND`; `SHARE` uses its own
@@ -163,6 +190,9 @@ All conversion rates convert source currency to EUR.
 - Omit optional liability `taxValue`; FlexQuery has no year-end debt balance
 
 ## Git and GitHub
+
+The minimum supported Python version is 3.11.
+CI tests 3.11 and 3.12; Black and Ruff target Python 3.11.
 
 - Default branch: `main`
 - Minor changes: commit directly to `main`
