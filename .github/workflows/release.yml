@@ -56,16 +56,10 @@ jobs:
           python .github\scripts\prepare_release.py --tag $env:RELEASE_TAG --installer dist\ibkr-etaxstatement.exe --output dist\release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate WinGet manifests
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
-          Repair-WinGetPackageManager -AllUsers -Latest
-          $env:PATH += ";$env:LOCALAPPDATA\Microsoft\WindowsApps"
-          winget --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          winget validate --manifest dist\release\winget --disable-interactivity
+          $winget = & .github\scripts\setup-winget.ps1 -Destination "$env:RUNNER_TEMP\release-winget"
+          & $winget validate --manifest dist\release\winget --disable-interactivity
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
