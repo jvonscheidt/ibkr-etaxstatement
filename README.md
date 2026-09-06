@@ -1,6 +1,6 @@
 # ibkr-etaxstatement (eSteuerauszug / eRelevé fiscal)
 
-Version: **0.3.0**.
+Version: **0.3.1**.
 
 Convert an **Interactive Brokers (IBKR) FlexQuery XML export** into a Swiss
 **eCH-0196 E-Steuerauszug** — both as validated XML and as an **eCH-0270 barcode
@@ -182,6 +182,8 @@ python -m pytest
 The suite covers parsing, FX→CHF conversion, eCH-0196 generation, an end-to-end
 XSD validation, and barcode round-trip/structure (the barcode tests self-skip if
 their optional decode dependencies are absent). CI exercises Python 3.11 and 3.12.
+Release-script tests mock GitHub APIs and require Node.js 24; they skip locally
+when Node is absent, while CI installs it explicitly.
 
 ## Release build
 
@@ -191,16 +193,59 @@ python -m PyInstaller --noconfirm --clean ibkr-etaxstatement.spec
 ```
 
 The portable x64 executable is written to `dist\ibkr-etaxstatement.exe`.
+Version 0.3.1 includes the automatic official XSD refresh and cache handling
+missing from the v0.3.0 tagged source.
 
-### WinGet publishing
+### Tag-driven publishing
 
-`.github/workflows/release.yml` opens the `microsoft/winget-pkgs` pull request
-when a GitHub release is published. It submits the checked-in manifest for the
-initial package version and generates updates from release assets for later
-versions. The repository requires:
+`.github/workflows/release.yml` runs when a stable `vMAJOR.MINOR.PATCH` tag is
+pushed. The tagged commit must belong to `main`, and its version must match
+`convert.py`, this README, and both string and numeric versions in
+`packaging/windows-version-info.txt`. Before tagging, merge the release changes
+to `main` with green CI. Do not move an existing published tag.
+
+The workflow runs the reusable CI workflow against the tagged source, builds a
+Windows x64 executable, checks its CLI version, generates manifests from
+`packaging/winget/templates`, and validates them with WinGet. The executable's
+SHA-256 is calculated from that exact build, not copied from an older release.
+It uploads the executable, `SHA256SUMS`, and three manifest files to a draft
+GitHub release, publishes it only after every asset upload succeeds, then opens
+the `microsoft/winget-pkgs` pull request in the same workflow. Building and
+uploading an executable manually is no longer required.
+
+To prepare and validate assets locally without publishing (use a fresh output
+directory):
+
+```powershell
+python .github\scripts\prepare_release.py --tag v0.3.1
+python -m PyInstaller --noconfirm --clean ibkr-etaxstatement.spec
+python .github\scripts\prepare_release.py --tag v0.3.1 --installer dist\ibkr-etaxstatement.exe --output dist\release-0.3.1
+winget validate --manifest dist\release-0.3.1\winget
+```
+
+Once ready, push a new version tag to trigger publication. No release is created
+by the local preparation commands above.
+
+### WinGet credentials and recovery
+
+WinGet submission requires:
 
 1. A `jvonscheidt/winget-pkgs` fork.
 2. A `WINGET_TOKEN` repository secret containing a classic GitHub PAT with the
    `public_repo` scope.
 
-The workflow can also publish an existing release through `workflow_dispatch`.
+The submission branches from the fork's existing `master`; it does not sync or
+modify the fork's default branch or any workflow files. The PAT therefore does
+not need the `workflow` scope. Initial packages and subsequent versions use the
+same generated-manifest submission path.
+
+If WinGet submission fails after GitHub publication, rerun **only failed jobs**
+in that tag's Actions run. An existing open/merged PR or accepted version is
+not submitted twice. Published release assets are never overwritten; rerunning
+the entire workflow stops at an already-published release. A failed upload
+leaves a draft that can be completed by retrying.
+
+After submission, complete the upstream checklist and CLA, and resolve any
+installer/Defender findings before merge. Successful GitHub publication or PR
+creation does not mean the package is available in WinGet. The existing v0.3.0
+submission's installation block is not bypassed by this workflow.
