@@ -191,14 +191,12 @@ python -m PyInstaller --noconfirm --clean ibkr-etaxstatement.spec
 ```
 
 The portable x64 executable is written to `dist\ibkr-etaxstatement.exe`.
-Version 0.3.1 includes the automatic official XSD refresh and cache handling
-missing from the v0.3.0 tagged source.
 
 ### Tag-driven publishing
 
 `.github/workflows/release.yml` runs when a stable `vMAJOR.MINOR.PATCH` tag is
 pushed. The tagged commit must belong to `main`, and its version must match
-`convert.py`, this README, and both string and numeric versions in
+`convert.py` and both string and numeric versions in
 `packaging/windows-version-info.txt`. Before tagging, merge the release changes
 to `main` with green CI. Do not move an existing published tag.
 

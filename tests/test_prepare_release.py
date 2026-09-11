@@ -19,8 +19,7 @@ SPEC.loader.exec_module(release)
 def source(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
-    for name in ("convert.py", "README.md"):
-        shutil.copyfile(ROOT / name, root / name)
+    shutil.copyfile(ROOT / "convert.py", root / "convert.py")
     shutil.copytree(ROOT / "packaging", root / "packaging")
     return root
 
@@ -43,7 +42,6 @@ def test_invalid_or_mismatched_tag_is_rejected(tag):
     ("path", "old", "new"),
     [
         ("convert.py", '__version__ = "0.3.1"', '__version__ = "0.3.0"'),
-        ("README.md", "Version: **0.3.1**.", "Version: **0.3.0**."),
         (
             "packaging/windows-version-info.txt",
             'StringStruct("FileVersion", "0.3.1")',

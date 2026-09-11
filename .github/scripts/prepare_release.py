@@ -29,9 +29,6 @@ def validate_version(root: Path, tag: str) -> str:
     ]
     if versions != [version]:
         raise ValueError(f"convert.py version does not match {tag}")
-    readme = (root / "README.md").read_text(encoding="utf-8")
-    if f"Version: **{version}**." not in readme:
-        raise ValueError(f"README.md version does not match {tag}")
     windows = (root / "packaging" / "windows-version-info.txt").read_text(
         encoding="utf-8"
     )
