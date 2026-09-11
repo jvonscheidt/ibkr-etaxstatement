@@ -191,8 +191,8 @@ All conversion rates convert source currency to EUR.
 
 ## Git and GitHub
 
-The minimum supported Python version is 3.11.
-CI tests 3.11 and 3.12; Black and Ruff target Python 3.11.
+The minimum supported Python version is 3.12.
+CI tests 3.12; Black and Ruff target Python 3.12.
 
 - Default branch: `main`
 - Minor changes: commit directly to `main`

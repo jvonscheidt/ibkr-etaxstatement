@@ -38,7 +38,7 @@ realised trade gains/losses are intentionally **not** parsed or reported.
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.12+
 - Dependencies in [`requirements.txt`](requirements.txt): `lxml` (XSD
   validation), and for the barcode PDF `pdf417gen` (vroonhof fork, installed
   from git), `reportlab`, `Pillow`, `python-barcode`, `pypdf`.
@@ -179,7 +179,7 @@ python -m pytest
 
 The suite covers parsing, FX→CHF conversion, eCH-0196 generation, an end-to-end
 XSD validation, and barcode round-trip/structure (the barcode tests self-skip if
-their optional decode dependencies are absent). CI exercises Python 3.11 and 3.12.
+their optional decode dependencies are absent). CI exercises Python 3.12.
 Release-script tests mock GitHub APIs and require Node.js 24; they skip locally
 when Node is absent, while CI installs it explicitly.
 
