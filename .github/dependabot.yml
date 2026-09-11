@@ -1,0 +1,12 @@
+version: 2
+
+updates:
+  # Keeps the commit SHAs in .github/workflows pinned to the newest release.
+  # Dependabot rewrites both the SHA and its trailing version comment, so the
+  # pins stay current without reverting to mutable tags.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"

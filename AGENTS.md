@@ -206,6 +206,8 @@ CI tests 3.12; Black and Ruff target Python 3.12.
 - Update branches with `git pull --rebase`
 - Never force-push shared branches
 - Use `gh` for GitHub work
+- Pin workflow actions to a commit SHA with a `# vX.Y.Z` comment; never
+  use a mutable tag. Dependabot bumps them weekly
 - Keep PRs small and single-purpose
 - Require green CI before merge
 - For releases, update README, validate winget manifest, tag new version.
