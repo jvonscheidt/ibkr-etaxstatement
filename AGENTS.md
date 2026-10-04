@@ -180,6 +180,8 @@ All conversion rates convert source currency to EUR.
   shared action ID or ex-date. Same-currency tax joins its income's payment
 - Swiss `grossRevenueA` applies only to income linked to Swiss withholding,
   never to all income on the same date
+- Derive `bankAccountCountry` from AccountInformation `ibEntity`; warn and use
+  GB for unknown entities
 - Reject inputs containing multiple FlexStatements; require one account/year
   per input file
 - Parse quantities with Decimal and preserve fractional precision in XML

@@ -414,6 +414,32 @@ class TestBuild:
         )
         assert tax_value.get("value") == "0.13"
 
+    @pytest.mark.parametrize(
+        ("entity", "country"), [("IB-UK", "GB"), ("IB-LLC", "US"), ("IB-IE", "IE")]
+    )
+    def test_bank_country_follows_ibkr_entity(self, data, entity, country):
+        from dataclasses import replace
+
+        credit = data.cash_transactions[0]
+        data.cash_transactions = [
+            credit,
+            replace(credit, amount=-1.0, tx_type="Broker Interest Paid"),
+        ]
+        data.account.ib_entity = entity
+        root = build(data)
+
+        accounts = root.findall(f"{_q('listOfBankAccounts')}/{_q('bankAccount')}")
+        accounts += root.findall(f"{_q('listOfLiabilities')}/{_q('liabilityAccount')}")
+        assert len(accounts) == 2
+        assert {a.get("bankAccountCountry") for a in accounts} == {country}
+
+    def test_unknown_ibkr_entity_warns(self, data):
+        data.account.ib_entity = ""
+        with pytest.warns(UserWarning, match="Unknown IBKR entity"):
+            root = build(data)
+        account = root.find(f"{_q('listOfBankAccounts')}/{_q('bankAccount')}")
+        assert account.get("bankAccountCountry") == "GB"
+
     def test_interest_with_isin_is_still_reported(self, data):
         from dataclasses import replace
 

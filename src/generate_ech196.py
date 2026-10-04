@@ -39,6 +39,31 @@ MINOR_VERSION = "22"
 # the eCH-0270 barcode's Code 128 payload (imported by generate_barcode_pdf).
 IBKR_CLEARING_NUMBER = "89095"
 
+# Domicile of the IBKR entity holding the account (AccountInformation ibEntity,
+# e.g. "IB-UK"), keyed without separators.
+IB_ENTITY_COUNTRIES = {
+    "IBUK": "GB",
+    "IBLLC": "US",
+    "IBIE": "IE",
+    "IBCE": "HU",
+    "IBCAN": "CA",
+    "IBAU": "AU",
+    "IBHK": "HK",
+    "IBSG": "SG",
+}
+
+
+def _bank_country(ib_entity: str) -> str:
+    country = IB_ENTITY_COUNTRIES.get(re.sub(r"[^A-Z]", "", ib_entity.upper()))
+    if country is None:
+        warnings.warn(
+            f"Unknown IBKR entity {ib_entity!r}; cash and margin accounts, if any, "
+            "are reported as domiciled in GB. Confirm the account's country.",
+            stacklevel=2,
+        )
+        return "GB"
+    return country
+
 
 def _q(tag: str) -> str:
     return f"{{{NS}}}{tag}"
@@ -396,7 +421,7 @@ def _build_security_payments(
             payment.set("name", "Withholding tax adjustment")
 
 
-def _build_bank_accounts(data: IBKRData) -> ET.Element:
+def _build_bank_accounts(data: IBKRData, country: str) -> ET.Element:
     """Build cash income, retaining foreign withholding as payment annotations."""
     # Group by currency
     income_by_ccy: dict[str, list[CashTransaction]] = {}
@@ -422,7 +447,7 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
             list_el,
             _q("bankAccount"),
             bankAccountName=f"IBKR {ccy} Cash",
-            bankAccountCountry="GB",  # IB-UK
+            bankAccountCountry=country,
             bankAccountCurrency=ccy,
             totalTaxValue="0.00",  # closing balance not available
             totalGrossRevenueA="0.00",
@@ -484,7 +509,7 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
     return list_el
 
 
-def _build_liabilities(data: IBKRData) -> ET.Element:
+def _build_liabilities(data: IBKRData, country: str) -> ET.Element:
     """
     Build <listOfLiabilities> from margin/debit interest ("Broker Interest Paid").
 
@@ -508,7 +533,7 @@ def _build_liabilities(data: IBKRData) -> ET.Element:
             list_el,
             _q("liabilityAccount"),
             bankAccountName=f"IBKR {ccy} Margin",
-            bankAccountCountry="GB",  # IB-UK
+            bankAccountCountry=country,
             bankAccountCurrency=ccy,
             totalTaxValue="0.00",  # closing debt balance not available
             totalGrossRevenueB="0.00",  # filled in below
@@ -561,8 +586,9 @@ def build(data: IBKRData, eur_chf_override: float | None = None) -> ET.Element:
         valuation_fx_rates[(year_end, "CHF", "EUR")] = chf_eur
 
     sec_list = _build_securities(data, year_end, valuation_fx_rates)
-    ba_list = _build_bank_accounts(data)
-    li_list = _build_liabilities(data)
+    bank_country = _bank_country(data.account.ib_entity)
+    ba_list = _build_bank_accounts(data, bank_country)
+    li_list = _build_liabilities(data, bank_country)
 
     canton = data.account.canton
     creation_dt = datetime.now(UTC).astimezone().strftime("%Y-%m-%dT%H:%M:%S")
