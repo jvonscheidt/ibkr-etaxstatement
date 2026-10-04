@@ -65,8 +65,9 @@ the latest official v2.2 schema and its eCH dependencies, using local
 `schemaLocation` references. It searches for `documentation/eCH-0196-2-2.xsd`
 beside `convert.py` or the Windows executable, then in the working directory.
 An existing cache is refreshed in place; otherwise the application directory is
-used. If downloading fails, the cached copy is retained. Validation is explicitly
-skipped if the main XSD or `lxml` is absent.
+used, and superseded dependency folders are removed. If downloading fails, the
+cached copy is retained. Validation is explicitly skipped if `lxml` is absent or
+the main XSD is absent or unusable.
 
 ## Usage
 
@@ -179,7 +180,9 @@ python -m pytest
 
 The suite covers parsing, FX→CHF conversion, eCH-0196 generation, an end-to-end
 XSD validation, and barcode round-trip/structure (the barcode tests self-skip if
-their optional decode dependencies are absent). CI exercises Python 3.12.
+their optional decode dependencies are absent). XSD tests skip without
+`documentation/eCH-0196-2-2.xsd`; CI downloads it first and fails if it cannot.
+CI exercises Python 3.12.
 Release-script tests mock GitHub APIs and require Node.js 24; they skip locally
 when Node is absent, while CI installs it explicitly.
 

@@ -211,6 +211,75 @@ def test_failed_schema_install_preserves_complete_cached_graph(monkeypatch, tmp_
     assert schema.validate(etree.fromstring(b"<valid>value</valid>"))
 
 
+def _schema_graph_download(url, timeout):
+    import convert
+
+    if url == convert.XSD_URL:
+        return io.BytesIO(
+            b'<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+            b'<xs:include schemaLocation="https://www.ech.ch/xmlns/t/1/dep.xsd"/>'
+            b"</xs:schema>"
+        )
+    return io.BytesIO(b'<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>')
+
+
+def test_repeated_refreshes_keep_only_current_schema_generation(monkeypatch, tmp_path):
+    import convert
+
+    xsd_path = tmp_path / "eCH-0196-2-2.xsd"
+    monkeypatch.setattr(convert, "_find_xsd", lambda: xsd_path)
+    monkeypatch.setattr(convert.urllib.request, "urlopen", _schema_graph_download)
+    unrelated = tmp_path / "notes"
+    unrelated.mkdir()
+
+    for _ in range(3):
+        convert._download_xsd()
+
+    generations = list(tmp_path.glob("ech-schemas-*"))
+    assert len(generations) == 1
+    assert f'schemaLocation="{generations[0].name}/dep.xsd"' in xsd_path.read_text(
+        encoding="utf-8"
+    )
+    assert unrelated.is_dir()
+
+
+def test_single_file_refresh_removes_superseded_generation(monkeypatch, tmp_path):
+    import convert
+
+    xsd_path = tmp_path / "eCH-0196-2-2.xsd"
+    stale = tmp_path / "ech-schemas-old"
+    stale.mkdir()
+    (stale / "dep.xsd").write_bytes(b"old")
+    content = b'<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>'
+    monkeypatch.setattr(convert, "_find_xsd", lambda: xsd_path)
+    monkeypatch.setattr(
+        convert.urllib.request, "urlopen", lambda _url, timeout: io.BytesIO(content)
+    )
+
+    convert._download_xsd()
+
+    assert xsd_path.read_bytes() == content
+    assert not stale.exists()
+
+
+def test_failed_refresh_keeps_referenced_generation(monkeypatch, tmp_path):
+    import convert
+
+    xsd_path = tmp_path / "eCH-0196-2-2.xsd"
+    monkeypatch.setattr(convert, "_find_xsd", lambda: xsd_path)
+    monkeypatch.setattr(convert.urllib.request, "urlopen", _schema_graph_download)
+    convert._download_xsd()
+    generations = set(tmp_path.glob("ech-schemas-*"))
+
+    def fail(_url, timeout):
+        raise OSError("offline")
+
+    monkeypatch.setattr(convert.urllib.request, "urlopen", fail)
+    convert._download_xsd()
+
+    assert set(tmp_path.glob("ech-schemas-*")) == generations
+
+
 def test_frozen_download_uses_executable_directory_not_extraction(
     monkeypatch, tmp_path
 ):
@@ -358,3 +427,31 @@ def test_missing_external_xsd_is_explicit(monkeypatch, tmp_path, capsys):
     assert convert._find_xsd() is None
     assert convert._validate(ET.Element("unused"))
     assert "skipping validation" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        # Legacy cache: remote imports lxml will not fetch.
+        '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" '
+        'xmlns:d="urn:dep"><xs:import namespace="urn:dep" '
+        'schemaLocation="missing/dep.xsd"/>'
+        '<xs:element name="valid" type="d:MissingType"/></xs:schema>',
+        "not xml",
+    ],
+    ids=["unresolved-import", "malformed"],
+)
+def test_unusable_xsd_skips_validation_explicitly(
+    monkeypatch, tmp_path, capsys, content
+):
+    import xml.etree.ElementTree as ET
+
+    import convert
+
+    pytest.importorskip("lxml.etree")
+    xsd_path = tmp_path / "eCH-0196-2-2.xsd"
+    xsd_path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(convert, "_find_xsd", lambda: xsd_path)
+
+    assert convert._validate(ET.Element("unused"))
+    assert "unusable" in capsys.readouterr().out

@@ -78,8 +78,10 @@ Startup refreshes the official v2.2 XSD and its eCH dependencies, retaining
 namespace declarations and using local `schemaLocation` references. Validation
 searches `documentation/eCH-0196-2-2.xsd` beside the script or frozen executable
 first, then in the working directory. An existing cache is refreshed in place;
-otherwise the application directory is used. Failed downloads retain the cache.
-`documentation/` is git-ignored. Missing `lxml` or XSD causes explicit skip.
+otherwise the application directory is used. Successful refreshes remove
+superseded `ech-schemas-*` folders; failed downloads retain the cache.
+`documentation/` is git-ignored; CI downloads the XSD before pytest. Missing
+`lxml`, or a missing or unusable XSD, causes explicit skip.
 
 ## Structure
 

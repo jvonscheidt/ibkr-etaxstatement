@@ -109,6 +109,7 @@ def _download_xsd() -> None:
                 (staging / name).write_bytes(content)
             if len(schemas) == 1:
                 os.replace(staging / xsd_path.name, xsd_path)
+                current = None
             else:
                 # Keep dependencies isolated; replacing the root switches the cache.
                 os.replace(staging, generation)
@@ -117,12 +118,20 @@ def _download_xsd() -> None:
                 except OSError:
                     shutil.rmtree(generation)
                     raise
+                current = generation
+        _remove_stale_generations(xsd_path.parent, current)
         print(f"XSD updated: {xsd_path}")
     except (OSError, urllib.error.URLError, ExpatError, ValueError) as exc:
         if xsd_path.exists():
             print(f"Warning: XSD download failed ({exc}); using cached copy.")
         else:
             print(f"Warning: XSD download failed ({exc}); validation will be skipped.")
+
+
+def _remove_stale_generations(directory: Path, current: Path | None) -> None:
+    for path in directory.glob("ech-schemas-*"):
+        if path.is_dir() and path != current:
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def _application_dir() -> Path:
@@ -155,7 +164,12 @@ def _validate(root: ET.Element) -> bool:
         print("Download from: https://www.ech.ch/de/ech/ech-0196/2.2.0")
         return True
 
-    schema = lxml_et.XMLSchema(lxml_et.parse(str(xsd_path)))
+    try:
+        schema = lxml_et.XMLSchema(lxml_et.parse(str(xsd_path)))
+    except (OSError, lxml_et.XMLSyntaxError, lxml_et.XMLSchemaParseError) as exc:
+        print(f"XSD at {xsd_path} is unusable ({exc}) — skipping validation")
+        print("Delete the documentation folder and rerun online to refresh it.")
+        return True
     xml_str = serialize(root)
     doc = lxml_et.fromstring(xml_str.encode())
     if schema.validate(doc):

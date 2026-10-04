@@ -35,4 +35,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements.txt
+      # documentation/ is git-ignored; without the XSD, validation tests skip.
+      - name: Fetch eCH-0196 XSD
+        run: python -c "import sys, convert; convert._download_xsd(); sys.exit(convert._find_xsd() is None)"
       - run: python -m pytest
