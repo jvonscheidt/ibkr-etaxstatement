@@ -13,6 +13,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from .dividend_entitlements import (
     DIVIDEND_TYPES,
     PaymentKey,
+    linked_income_keys,
     match_entitlement,
     payment_key,
 )
@@ -37,6 +38,31 @@ MINOR_VERSION = "22"
 # Interactive Brokers' clearing number, used in the eCH-196 document id and
 # the eCH-0270 barcode's Code 128 payload (imported by generate_barcode_pdf).
 IBKR_CLEARING_NUMBER = "89095"
+
+# Domicile of the IBKR entity holding the account (AccountInformation ibEntity,
+# e.g. "IB-UK"), keyed without separators.
+IB_ENTITY_COUNTRIES = {
+    "IBUK": "GB",
+    "IBLLC": "US",
+    "IBIE": "IE",
+    "IBCE": "HU",
+    "IBCAN": "CA",
+    "IBAU": "AU",
+    "IBHK": "HK",
+    "IBSG": "SG",
+}
+
+
+def _bank_country(ib_entity: str) -> str:
+    country = IB_ENTITY_COUNTRIES.get(re.sub(r"[^A-Z]", "", ib_entity.upper()))
+    if country is None:
+        warnings.warn(
+            f"Unknown IBKR entity {ib_entity!r}; cash and margin accounts, if any, "
+            "are reported as domiciled in GB. Confirm the account's country.",
+            stacklevel=2,
+        )
+        return "GB"
+    return country
 
 
 def _q(tag: str) -> str:
@@ -309,39 +335,53 @@ def _build_security_payments(
     accruals: list[DividendAccrual],
 ) -> None:
     """Emit currency-specific income and signed withholding adjustments."""
+    income_keys = {payment_key(tx) for tx in income_txs}
+    keyed = [(payment_key(tx), tx) for tx in income_txs]
+    # Income keys whose Swiss tax was charged, or refunded, by a linked tax row.
+    charged: set[PaymentKey] = set()
+    refunded: set[PaymentKey] = set()
+    unmatched_tax = ambiguous_tax = False
+    for tx in wht_txs:
+        key = payment_key(tx)
+        linked = linked_income_keys(tx, income_keys)
+        same_currency = [k for k in linked if k[1] == key[1]]
+        # Tax shares its income's payment line only within one currency.
+        keyed.append((same_currency[0] if len(same_currency) == 1 else key, tx))
+        (refunded if tx.amount > 0 else charged).update(linked)
+        if tx.amount < 0:
+            unmatched_tax |= not linked
+            ambiguous_tax |= len(linked) > 1
+
     groups: dict[PaymentKey, list[CashTransaction]] = {}
-    for tx in income_txs + wht_txs:
-        groups.setdefault(payment_key(tx), []).append(tx)
+    for key, tx in keyed:
+        groups.setdefault(key, []).append(tx)
     entitlements = {
         key: match_entitlement(txs, accruals) for key, txs in groups.items()
     }
     income: dict[PaymentKey, Decimal] = {}
-    for tx in income_txs:
-        key = payment_key(tx)
-        income[key] = income.get(key, Decimal(0)) + Decimal(str(tx.amount))
-
     withholding: dict[PaymentKey, Decimal] = {}
-    for tx in wht_txs:
-        key = payment_key(tx)
-        withholding[key] = withholding.get(key, Decimal(0)) - Decimal(str(tx.amount))
+    for key, tx in keyed:
+        amount = Decimal(str(tx.amount))
+        if tx.tx_type == "Withholding Tax":
+            withholding[key] = withholding.get(key, Decimal(0)) - amount
+        else:
+            income[key] = income.get(key, Decimal(0)) + amount
 
     swiss = sec_el.get("country") == "CH"
-    tax_dates = {key[0] for key, tax in withholding.items() if tax > 0}
-    refund_dates = {key[0] for key, tax in withholding.items() if tax < 0}
-    if swiss:
-        income_dates = {key[0] for key in income}
-        unmatched_dates = {
-            key[0]
-            for key, tax in withholding.items()
-            if tax > 0 and key[0] not in income_dates
-        }
-        if unmatched_dates:
-            warnings.warn(
-                f"Swiss withholding for {sec_el.get('isin', 'unknown security')} "
-                "has no same-day income; confirm the income's A/B classification "
-                "manually.",
-                stacklevel=2,
-            )
+    if swiss and unmatched_tax:
+        warnings.warn(
+            f"Swiss withholding for {sec_el.get('isin', 'unknown security')} "
+            "has no matching income payment; confirm the income's A/B "
+            "classification manually.",
+            stacklevel=2,
+        )
+    if swiss and ambiguous_tax:
+        warnings.warn(
+            f"Swiss withholding for {sec_el.get('isin', 'unknown security')} "
+            "matches several same-day payments, which are all reported as "
+            "grossRevenueA; confirm their A/B classification manually.",
+            stacklevel=2,
+        )
     if not swiss and any(withholding.values()):
         warnings.warn(
             f"Foreign withholding for {sec_el.get('isin', 'unknown security')} "
@@ -359,9 +399,7 @@ def _build_security_payments(
         gross_chf = _chf(gross * Decimal(str(rate)))
         tax_chf = _chf(tax * Decimal(str(rate)))
         # Refunds can reverse A income, but do not move new positive income to A.
-        revenue_a = swiss and (
-            pay_date in tax_dates or (gross < 0 and pay_date in refund_dates)
-        )
+        revenue_a = swiss and (key in charged or (gross < 0 and key in refunded))
 
         payment = ET.SubElement(
             sec_el,
@@ -383,7 +421,7 @@ def _build_security_payments(
             payment.set("name", "Withholding tax adjustment")
 
 
-def _build_bank_accounts(data: IBKRData) -> ET.Element:
+def _build_bank_accounts(data: IBKRData, country: str) -> ET.Element:
     """Build cash income, retaining foreign withholding as payment annotations."""
     # Group by currency
     income_by_ccy: dict[str, list[CashTransaction]] = {}
@@ -409,7 +447,7 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
             list_el,
             _q("bankAccount"),
             bankAccountName=f"IBKR {ccy} Cash",
-            bankAccountCountry="GB",  # IB-UK
+            bankAccountCountry=country,
             bankAccountCurrency=ccy,
             totalTaxValue="0.00",  # closing balance not available
             totalGrossRevenueA="0.00",
@@ -471,7 +509,7 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
     return list_el
 
 
-def _build_liabilities(data: IBKRData) -> ET.Element:
+def _build_liabilities(data: IBKRData, country: str) -> ET.Element:
     """
     Build <listOfLiabilities> from margin/debit interest ("Broker Interest Paid").
 
@@ -495,7 +533,7 @@ def _build_liabilities(data: IBKRData) -> ET.Element:
             list_el,
             _q("liabilityAccount"),
             bankAccountName=f"IBKR {ccy} Margin",
-            bankAccountCountry="GB",  # IB-UK
+            bankAccountCountry=country,
             bankAccountCurrency=ccy,
             totalTaxValue="0.00",  # closing debt balance not available
             totalGrossRevenueB="0.00",  # filled in below
@@ -548,8 +586,9 @@ def build(data: IBKRData, eur_chf_override: float | None = None) -> ET.Element:
         valuation_fx_rates[(year_end, "CHF", "EUR")] = chf_eur
 
     sec_list = _build_securities(data, year_end, valuation_fx_rates)
-    ba_list = _build_bank_accounts(data)
-    li_list = _build_liabilities(data)
+    bank_country = _bank_country(data.account.ib_entity)
+    ba_list = _build_bank_accounts(data, bank_country)
+    li_list = _build_liabilities(data, bank_country)
 
     canton = data.account.canton
     creation_dt = datetime.now(UTC).astimezone().strftime("%Y-%m-%dT%H:%M:%S")

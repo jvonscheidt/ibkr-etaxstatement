@@ -81,7 +81,7 @@ def account() -> AccountInfo:
         last_name="Mustermann",
         canton="ZH",
         base_currency="EUR",
-        ib_entity="IBKR",
+        ib_entity="IB-UK",
     )
 
 

@@ -8,7 +8,8 @@ from decimal import Decimal
 
 import pytest
 
-from src.generate_ech196 import NS, build, serialize
+from src.dividend_entitlements import linked_income_keys, payment_key
+from src.generate_ech196 import NS, _chf, build, serialize
 from src.parse_ibkr import parse
 
 from .conftest import INCOME_XML, XSD_PATH
@@ -105,6 +106,88 @@ def test_split_dividend_and_pil_use_one_entitlement(entitlement_data):
     assert len(income) == 1
     assert income[0].get("quantity") == "10.002"
     assert income[0].get("amount") == "40.00"
+
+
+@pytest.mark.parametrize(
+    "missing", [{"ex_date": None}, {"action_id": ""}, {"ex_date": None, "conid": ""}]
+)
+def test_withholding_missing_an_identifier_stays_on_its_dividend(
+    entitlement_data, missing
+):
+    tax = entitlement_data.cash_transactions[1]
+    entitlement_data.cash_transactions[1] = replace(tax, **missing)
+
+    root = build(entitlement_data)
+
+    payments = _payments(root)
+    assert len(payments) == 2  # payout plus later refund, no split-off tax line
+    assert payments[0].get("amount") == "40.00"
+    assert payments[0].get("lumpSumTaxCreditAmount") == _chf(6 * 0.85 / 1.07)
+    assert payments[0].get("name") is None
+
+
+def test_withholding_with_a_conflicting_identifier_is_not_attached(entitlement_data):
+    entitlement_data.dividend_accruals.append(
+        replace(entitlement_data.dividend_accruals[0], action_id="2002")
+    )
+    tax = entitlement_data.cash_transactions[1]
+    entitlement_data.cash_transactions[1] = replace(tax, action_id="2002")
+
+    root = build(entitlement_data)
+
+    payments = _payments(root)
+    assert payments[0].get("lumpSumTaxCreditAmount") is None
+    assert payments[1].get("name") == "Withholding tax adjustment"
+
+
+@pytest.mark.parametrize(
+    ("link", "linked"),
+    [({}, False), ({"action_id": "1001"}, True), ({"ex_date": date(2025, 6, 1)}, True)],
+)
+def test_refunds_link_to_same_day_income_only_explicitly(
+    entitlement_data, link, linked
+):
+    income = entitlement_data.cash_transactions[0]
+    unlinked = {"amount": 6, "action_id": "", "ex_date": None, "conid": ""}
+    refund = replace(entitlement_data.cash_transactions[1], **(unlinked | link))
+
+    keys = linked_income_keys(refund, {payment_key(income)})
+
+    assert keys == ([payment_key(income)] if linked else [])
+
+
+def _swiss(data):
+    isin = "CH0038863350"
+    data.positions = [
+        replace(p, isin=isin, issuer_country_code="CH") for p in data.positions
+    ]
+    data.cash_transactions = [
+        replace(tx, isin=isin) if tx.isin else tx for tx in data.cash_transactions
+    ]
+    data.dividend_accruals = [replace(a, isin=isin) for a in data.dividend_accruals]
+    return data
+
+
+def test_swiss_tax_classifies_only_its_own_payment_as_a(entitlement_data):
+    data = _swiss(entitlement_data)
+    original = data.dividend_accruals[0]
+    # Same-day distribution without Swiss withholding, e.g. from capital
+    # contribution reserves, under its own corporate action.
+    data.dividend_accruals.append(
+        replace(original, action_id="2002", gross_amount=Decimal(10))
+    )
+    data.cash_transactions.append(
+        replace(data.cash_transactions[0], action_id="2002", amount=10)
+    )
+
+    root = build(data)
+
+    income = {p.get("amount"): p for p in _payments(root) if p.get("name") is None}
+    assert income["40.00"].get("grossRevenueB") == "0.00"
+    assert income["40.00"].get("withHoldingTaxClaim") != "0.00"
+    assert income["10.00"].get("grossRevenueA") == "0.00"
+    assert income["10.00"].get("grossRevenueB") != "0.00"
+    assert income["10.00"].get("withHoldingTaxClaim") == "0.00"
 
 
 def test_full_income_reversal_retains_original_entitlement(entitlement_data):

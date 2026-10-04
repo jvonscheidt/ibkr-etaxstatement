@@ -20,6 +20,34 @@ def payment_key(tx: CashTransaction) -> PaymentKey:
     )
 
 
+def linked_income_keys(
+    tax: CashTransaction, income_keys: set[PaymentKey]
+) -> list[PaymentKey]:
+    """Return the income payments, in any currency, a withholding row belongs to.
+
+    IBKR may omit the exDate or actionID on the tax row, so rows on the same
+    date link when no identifier reported by both differs. Refunds can land on
+    a new dividend's date and therefore need a shared action ID or ex-date.
+    """
+    key = payment_key(tax)
+    if key in income_keys:
+        return [key]
+    linked = []
+    for income in sorted(income_keys):
+        if income[0] != key[0]:
+            continue
+        # Identifiers: action ID, conid, model, ex-date.
+        pairs = list(zip(key[2:], income[2:]))
+        if any(ours and theirs and ours != theirs for ours, theirs in pairs):
+            continue
+        shared_action = bool(key[2]) and key[2] == income[2]
+        shared_ex_date = bool(key[5]) and key[5] == income[5]
+        if tax.amount > 0 and not (shared_action or shared_ex_date):
+            continue
+        linked.append(income)
+    return linked
+
+
 def match_entitlement(
     transactions: list[CashTransaction], accruals: list[DividendAccrual]
 ) -> DividendAccrual:
