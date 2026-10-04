@@ -376,11 +376,10 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
     wht_by_ccy: dict[str, list[CashTransaction]] = {}
 
     for tx in data.cash_transactions:
-        if tx.isin:  # security-linked → handled in securities section
-            continue
         if tx.tx_type == "Broker Interest Received":
             income_by_ccy.setdefault(tx.currency, []).append(tx)
-        elif tx.tx_type == "Withholding Tax":
+        # Security-linked withholding is handled in the securities section.
+        elif tx.tx_type == "Withholding Tax" and not tx.isin:
             wht_by_ccy.setdefault(tx.currency, []).append(tx)
 
     list_el = ET.Element(_q("listOfBankAccounts"))

@@ -130,22 +130,107 @@ class TestParseRealFile:
         assert parsed.period_to == date(2025, 12, 31)
 
 
-def test_positions_exclude_non_summary_and_non_year_end(tmp_path):
-    xml = """<FlexQueryResponse><FlexStatements><FlexStatement>
+def _parse_statement(tmp_path, body: str):
+    xml = f"""<FlexQueryResponse><FlexStatements>
+      <FlexStatement fromDate="01/01/2025" toDate="31/12/2025">
       <AccountInformation accountId="U1" name="A B" state="CH-ZH" currency="EUR"/>
-      <OpenPositions>
-        <OpenPosition levelOfDetail="LOT" isin="X1" reportDate="31/12/2025" position="1"/>
-        <OpenPosition levelOfDetail="SUMMARY" isin="X2" reportDate="30/06/2025" position="1"/>
-        <OpenPosition levelOfDetail="SUMMARY" isin="" reportDate="31/12/2025" position="1"/>
-        <OpenPosition levelOfDetail="SUMMARY" isin="X4" reportDate="31/12/2025" position="1"
-                      currency="EUR" markPrice="10" positionValue="10"/>
-      </OpenPositions>
+      {body}
     </FlexStatement></FlexStatements></FlexQueryResponse>"""
     f = tmp_path / "mini.xml"
     f.write_text(xml, encoding="utf-8")
-    parsed = parse(str(f))
-    # Only the LOT-excluded / mid-year / no-ISIN rows drop out; X4 remains.
+    return parse(str(f))
+
+
+_X4 = """<OpenPosition levelOfDetail="SUMMARY" isin="X4" reportDate="31/12/2025"
+    position="1" currency="EUR" markPrice="10" positionValue="10"/>"""
+
+
+def test_positions_exclude_lot_rows_and_warn_on_other_dates(tmp_path):
+    body = f"""<OpenPositions>
+      <OpenPosition levelOfDetail="LOT" isin="X1" reportDate="31/12/2025" position="1"/>
+      <OpenPosition levelOfDetail="SUMMARY" isin="X2" reportDate="30/06/2025" position="1"/>
+      {_X4}
+    </OpenPositions>"""
+    with pytest.warns(UserWarning, match="2025-06-30"):
+        parsed = _parse_statement(tmp_path, body)
     assert [p.isin for p in parsed.positions] == ["X4"]
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        (
+            '<OpenPosition levelOfDetail="LOT" isin="X1" reportDate="31/12/2025"/>',
+            "no SUMMARY rows",
+        ),
+        (
+            '<OpenPosition levelOfDetail="SUMMARY" isin="X2" reportDate="30/12/2025"/>',
+            "No open positions are reported at the statement period end",
+        ),
+        (
+            '<OpenPosition levelOfDetail="SUMMARY" isin="" symbol="OPT" '
+            'assetCategory="OPT" reportDate="31/12/2025"/>' + _X4,
+            "'OPT'.*has no ISIN",
+        ),
+    ],
+)
+def test_positions_that_would_be_dropped_are_rejected(tmp_path, rows, message):
+    with pytest.raises(ValueError, match=message):
+        _parse_statement(tmp_path, f"<OpenPositions>{rows}</OpenPositions>")
+
+
+def _cash(tx_type: str, amount: str = "10", isin: str = "", **attrs) -> str:
+    element = ET.Element(
+        "CashTransaction",
+        {
+            "type": tx_type,
+            "currency": "CHF",
+            "amount": amount,
+            "settleDate": "15/06/2025",
+            "isin": isin,
+            **attrs,
+        },
+    )
+    return ET.tostring(element, encoding="unicode")
+
+
+def test_summary_cash_rows_are_not_counted_twice(tmp_path):
+    rows = _cash("Broker Interest Received", levelOfDetail="DETAIL") + _cash(
+        "Broker Interest Received", levelOfDetail="SUMMARY"
+    )
+    parsed = _parse_statement(tmp_path, f"<CashTransactions>{rows}</CashTransactions>")
+    assert [tx.amount for tx in parsed.cash_transactions] == [10.0]
+
+
+def test_summary_only_cash_rows_are_rejected(tmp_path):
+    rows = _cash("Broker Interest Received", levelOfDetail="SUMMARY")
+    with pytest.raises(ValueError, match="only SUMMARY rows"):
+        _parse_statement(tmp_path, f"<CashTransactions>{rows}</CashTransactions>")
+
+
+@pytest.mark.parametrize(
+    "tx_type", ["Bond Interest Received", "Bond Interest Paid", "871(m) Withholding"]
+)
+def test_unsupported_tax_relevant_cash_types_are_rejected(tmp_path, tx_type):
+    rows = _cash(tx_type, isin="US0000000001")
+    with pytest.raises(ValueError, match="not supported"):
+        _parse_statement(tmp_path, f"<CashTransactions>{rows}</CashTransactions>")
+
+
+@pytest.mark.parametrize("tx_type", ["Dividends", "Payment In Lieu Of Dividends"])
+def test_dividends_without_isin_are_rejected(tmp_path, tx_type):
+    rows = _cash(tx_type, symbol="ABC")
+    with pytest.raises(ValueError, match="'ABC' has no ISIN"):
+        _parse_statement(tmp_path, f"<CashTransactions>{rows}</CashTransactions>")
+
+
+def test_unrecognised_cash_types_warn_and_known_non_income_is_silent(tmp_path, recwarn):
+    rows = _cash("Deposits/Withdrawals", "1000") + _cash("Mystery Credit")
+    parsed = _parse_statement(tmp_path, f"<CashTransactions>{rows}</CashTransactions>")
+    assert parsed.cash_transactions == []
+    assert [str(w.message) for w in recwarn] == [
+        "Ignoring cash transactions of unrecognised type: 'Mystery Credit'"
+    ]
 
 
 @pytest.mark.parametrize(

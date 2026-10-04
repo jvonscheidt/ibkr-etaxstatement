@@ -371,6 +371,13 @@ class TestBuild:
         with pytest.raises(ValueError, match="full calendar year"):
             build(data)
 
+    def test_interest_with_isin_is_still_reported(self, data):
+        from dataclasses import replace
+
+        data.cash_transactions = [replace(data.cash_transactions[0], isin="XS1")]
+        root = build(data)
+        assert root.find(_q("listOfBankAccounts")).get("totalGrossRevenueB") == "2.85"
+
     def test_serialize_roundtrips(self, data):
         xml = serialize(build(data))
         assert xml.startswith("<taxStatement") or "taxStatement" in xml
