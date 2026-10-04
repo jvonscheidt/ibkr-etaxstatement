@@ -433,10 +433,12 @@ def test_missing_external_xsd_is_explicit(monkeypatch, tmp_path, capsys):
     "content",
     [
         # Legacy cache: remote imports lxml will not fetch.
-        '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" '
-        'xmlns:d="urn:dep"><xs:import namespace="urn:dep" '
-        'schemaLocation="missing/dep.xsd"/>'
-        '<xs:element name="valid" type="d:MissingType"/></xs:schema>',
+        (
+            '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" '
+            'xmlns:d="urn:dep"><xs:import namespace="urn:dep" '
+            'schemaLocation="missing/dep.xsd"/>'
+            '<xs:element name="valid" type="d:MissingType"/></xs:schema>'
+        ),
         "not xml",
     ],
     ids=["unresolved-import", "malformed"],
