@@ -181,6 +181,8 @@ All conversion rates convert source currency to EUR.
   ISIN at period end; use DETAIL cash rows only (SUMMARY rows duplicate them);
   reject bond interest, 871(m) withholding and dividends without an ISIN; warn
   on unrecognised cash transaction types
+- Round CHF amounts half-up with Decimal, never float `round()`; format
+  exchange rates as plain decimals with at least 6 significant digits
 - Security-payment quantities and ex-dates come from matching dividend accruals,
   never year-end holdings or zero placeholders for sold securities
 - Require unambiguous entitlement metadata; fail on missing/conflicting records
