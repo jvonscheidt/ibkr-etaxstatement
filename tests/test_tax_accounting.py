@@ -124,7 +124,7 @@ def test_unmatched_swiss_withholding_warns_about_income_classification(tax_data)
         _tx(-35, "Withholding Tax", day=SECOND, isin=CH_ISIN),
     ]
 
-    with pytest.warns(UserWarning, match="no same-day income"):
+    with pytest.warns(UserWarning, match="no matching income payment"):
         root = build(tax_data)
 
     assert root.get("totalWithHoldingTaxClaim") == "35.00"

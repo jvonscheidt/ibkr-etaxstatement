@@ -175,6 +175,11 @@ All conversion rates convert source currency to EUR.
   in payment annotations and warn, not in Swiss withholding claims
 - Group security payments by date and currency; consolidate holdings by ISIN
   so their income and tax are emitted only once
+- Link withholding to same-date income when no identifier reported by both
+  rows differs (IBKR may omit exDate or actionID on tax rows); refunds need a
+  shared action ID or ex-date. Same-currency tax joins its income's payment
+- Swiss `grossRevenueA` applies only to income linked to Swiss withholding,
+  never to all income on the same date
 - Reject inputs containing multiple FlexStatements; require one account/year
   per input file
 - Parse quantities with Decimal and preserve fractional precision in XML
