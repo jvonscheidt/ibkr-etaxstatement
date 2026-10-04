@@ -174,9 +174,14 @@ and links to the eCH-0196 / eCH-0270 specifications.
 ## Tests
 
 ```bash
-pip install pytest
+pip install -r requirements-dev.txt
+black --check .
+ruff check .
 python -m pytest
 ```
+
+`requirements-dev.txt` pins the Black and Ruff versions CI uses; Dependabot
+bumps them weekly.
 
 The suite covers parsing, FX→CHF conversion, eCH-0196 generation, an end-to-end
 XSD validation, and barcode round-trip/structure (the barcode tests self-skip if

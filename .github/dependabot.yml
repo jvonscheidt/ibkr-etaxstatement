@@ -10,3 +10,15 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore"
+
+  # Bumps the pinned lint tools in requirements-dev.txt. Runtime requirements
+  # use minimum versions and are left alone.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-name: "black"
+      - dependency-name: "ruff"
+    commit-message:
+      prefix: "chore"

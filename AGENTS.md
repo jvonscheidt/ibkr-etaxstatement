@@ -68,6 +68,9 @@ python convert.py data/Tax.xml output.xml --eur-chf-rate 0.9311 --barcode-pdf ou
 # Dependencies
 pip install -r requirements.txt
 
+# Dependencies plus the pinned Black and Ruff versions CI uses
+pip install -r requirements-dev.txt
+
 # Required before every commit
 black .
 ruff check .

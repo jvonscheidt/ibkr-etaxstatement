@@ -1,0 +1,5 @@
+-r requirements.txt
+# Lint tools are pinned so a new release cannot fail CI without a code change.
+# Dependabot bumps them weekly.
+black==26.10.0
+ruff==0.16.10
