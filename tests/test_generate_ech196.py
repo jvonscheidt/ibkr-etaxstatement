@@ -9,6 +9,7 @@ import pytest
 from src.generate_ech196 import (
     NS,
     _chf,
+    _exchange_rate,
     _fx_to_chf,
     _security_category,
     _security_type,
@@ -30,6 +31,22 @@ class TestChfFormatting:
     def test_half_up_rounding(self):
         assert _chf(1.005) == "1.01"
         assert _chf(2.675) == "2.68"
+
+
+class TestExchangeRateFormatting:
+    @pytest.mark.parametrize(
+        ("rate", "expected"),
+        [
+            (1.0, "1.0"),
+            (1 / 1.074, "0.931099"),
+            # IDR-sized rates keep significant digits and never use exponents.
+            (4.75e-05, "0.0000475"),
+            (1 / 17000, "0.0000588235"),
+            (125.5, "125.5"),
+        ],
+    )
+    def test_formats_as_plain_decimal(self, rate, expected):
+        assert _exchange_rate(rate) == expected
 
 
 class TestFxToChf:
@@ -370,6 +387,39 @@ class TestBuild:
         data.period_from = date(2025, 2, 1)
         with pytest.raises(ValueError, match="full calendar year"):
             build(data)
+
+    def test_cash_and_debit_interest_round_half_up(self, data):
+        from dataclasses import replace
+
+        credit = data.cash_transactions[0]
+        data.cash_transactions = [
+            replace(credit, amount=0.125),
+            replace(credit, amount=-0.125, tx_type="Broker Interest Paid"),
+        ]
+        root = build(data)
+
+        # Float round() gives banker's 0.12; the eCH totals use half-up.
+        assert root.find(_q("listOfBankAccounts")).get("totalGrossRevenueB") == "0.13"
+        assert root.find(_q("listOfLiabilities")).get("totalGrossRevenueB") == "0.13"
+
+    def test_security_value_rounds_half_up(self, data):
+        from dataclasses import replace
+
+        data.positions = [
+            replace(data.positions[0], currency="CHF", position_value=0.125)
+        ]
+        tax_value = build(data).find(
+            f"{_q('listOfSecurities')}/{_q('depot')}/"
+            f"{_q('security')}/{_q('taxValue')}"
+        )
+        assert tax_value.get("value") == "0.13"
+
+    def test_interest_with_isin_is_still_reported(self, data):
+        from dataclasses import replace
+
+        data.cash_transactions = [replace(data.cash_transactions[0], isin="XS1")]
+        root = build(data)
+        assert root.find(_q("listOfBankAccounts")).get("totalGrossRevenueB") == "2.85"
 
     def test_serialize_roundtrips(self, data):
         xml = serialize(build(data))

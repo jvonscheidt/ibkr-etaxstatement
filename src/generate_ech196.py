@@ -43,9 +43,23 @@ def _q(tag: str) -> str:
     return f"{{{NS}}}{tag}"
 
 
+def _round_chf(value: float | Decimal) -> Decimal:
+    """Round half-up to 2 decimal places."""
+    return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def _chf(value: float | Decimal) -> str:
     """Round to 2 decimal places and format as string."""
-    return str(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    return str(_round_chf(value))
+
+
+def _exchange_rate(rate: float) -> str:
+    """Keep at least 6 decimals and 6 significant digits, without exponents."""
+    value = Decimal(str(rate))
+    exponent = min(-6, value.adjusted() - 5)
+    rounded = value.quantize(Decimal(1).scaleb(exponent), rounding=ROUND_HALF_UP)
+    text = format(rounded.normalize(), "f")
+    return text if "." in text else f"{text}.0"
 
 
 def _quantity(value: float | Decimal) -> str:
@@ -203,7 +217,7 @@ def _build_securities(
             )
             for p in positions
         )
-        chf_value = round(balance * rate, 2)
+        chf_value = _round_chf(Decimal(str(balance)) * Decimal(str(rate)))
 
         sec_attrs = {
             "positionId": str(idx),
@@ -228,7 +242,7 @@ def _build_securities(
             quantity=_quantity(quantity),
             balanceCurrency=pos.currency,
             balance=_chf(balance),
-            exchangeRate=str(round(rate, 6)),
+            exchangeRate=_exchange_rate(rate),
             value=_chf(chf_value),
         )
         if len(positions) == 1:
@@ -358,7 +372,7 @@ def _build_security_payments(
             quantity=_quantity(entitlement.quantity),
             amountCurrency=currency,
             amount=_chf(gross),
-            exchangeRate=str(round(rate, 6)),
+            exchangeRate=_exchange_rate(rate),
             grossRevenueA=gross_chf if revenue_a else "0.00",
             grossRevenueB="0.00" if revenue_a else gross_chf,
             withHoldingTaxClaim=tax_chf if swiss else "0.00",
@@ -376,11 +390,10 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
     wht_by_ccy: dict[str, list[CashTransaction]] = {}
 
     for tx in data.cash_transactions:
-        if tx.isin:  # security-linked → handled in securities section
-            continue
         if tx.tx_type == "Broker Interest Received":
             income_by_ccy.setdefault(tx.currency, []).append(tx)
-        elif tx.tx_type == "Withholding Tax":
+        # Security-linked withholding is handled in the securities section.
+        elif tx.tx_type == "Withholding Tax" and not tx.isin:
             wht_by_ccy.setdefault(tx.currency, []).append(tx)
 
     list_el = ET.Element(_q("listOfBankAccounts"))
@@ -390,7 +403,7 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
         wht_txs = wht_by_ccy.get(ccy, [])
 
         # Net amounts in CHF
-        acct_rev_b = 0.0
+        acct_rev_b = Decimal(0)
 
         ba_el = ET.SubElement(
             list_el,
@@ -407,7 +420,7 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
         # One payment per interest-received event
         for tx in sorted(income_txs, key=lambda t: t.settle_date):
             rate = _fx_to_chf(tx.currency, tx.settle_date, data.fx_rates)
-            rev_b_chf = round(tx.amount * rate, 2)
+            rev_b_chf = _round_chf(Decimal(str(tx.amount)) * Decimal(str(rate)))
             acct_rev_b += rev_b_chf
             ET.SubElement(
                 ba_el,
@@ -415,7 +428,7 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
                 paymentDate=tx.settle_date.isoformat(),
                 amountCurrency=tx.currency,
                 amount=_chf(tx.amount),
-                exchangeRate=str(round(rate, 6)),
+                exchangeRate=_exchange_rate(rate),
                 grossRevenueA="0.00",
                 grossRevenueB=_chf(rev_b_chf),
                 withHoldingTaxClaim="0.00",
@@ -442,7 +455,7 @@ def _build_bank_accounts(data: IBKRData) -> ET.Element:
                 "DA-1 eligibility not determined",
                 amountCurrency=ccy,
                 amount="0.00",
-                exchangeRate=str(round(rate, 6)),
+                exchangeRate=_exchange_rate(rate),
                 grossRevenueA="0.00",
                 grossRevenueB="0.00",
                 withHoldingTaxClaim="0.00",
@@ -474,7 +487,7 @@ def _build_liabilities(data: IBKRData) -> ET.Element:
             interest_by_ccy.setdefault(tx.currency, []).append(tx)
 
     list_el = ET.Element(_q("listOfLiabilities"))
-    total_rev_b = 0.0
+    total_rev_b = Decimal(0)
 
     for ccy in sorted(interest_by_ccy):
         txs = interest_by_ccy[ccy]
@@ -488,11 +501,11 @@ def _build_liabilities(data: IBKRData) -> ET.Element:
             totalGrossRevenueB="0.00",  # filled in below
         )
 
-        acct_rev_b = 0.0
+        acct_rev_b = Decimal(0)
         for tx in sorted(txs, key=lambda t: t.settle_date):
             rate = _fx_to_chf(tx.currency, tx.settle_date, data.fx_rates)
             amount = -tx.amount  # "Broker Interest Paid" amounts are negative
-            rev_b_chf = round(amount * rate, 2)
+            rev_b_chf = _round_chf(Decimal(str(amount)) * Decimal(str(rate)))
             acct_rev_b += rev_b_chf
             ET.SubElement(
                 la_el,
@@ -500,7 +513,7 @@ def _build_liabilities(data: IBKRData) -> ET.Element:
                 paymentDate=tx.settle_date.isoformat(),
                 amountCurrency=tx.currency,
                 amount=_chf(amount),
-                exchangeRate=str(round(rate, 6)),
+                exchangeRate=_exchange_rate(rate),
                 grossRevenueB=_chf(rev_b_chf),
             )
 

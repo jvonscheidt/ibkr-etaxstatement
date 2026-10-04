@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import date
@@ -166,18 +167,31 @@ def _parse_account(elem) -> AccountInfo:
 
 
 def _parse_positions(stmt, period_to: date | None = None) -> list[OpenPosition]:
+    rows = stmt.findall("OpenPositions/OpenPosition")
+    # LOT rows repeat their SUMMARY row; without SUMMARY rows holdings would vanish.
+    summaries = [op for op in rows if op.get("levelOfDetail") == "SUMMARY"]
+    if rows and not summaries:
+        raise ValueError(
+            "OpenPositions contain no SUMMARY rows; enable the Summary level of "
+            "detail for Open Positions in the FlexQuery."
+        )
     positions = []
-    for op in stmt.findall("OpenPositions/OpenPosition"):
-        if op.get("levelOfDetail") != "SUMMARY":
-            continue
+    skipped_dates = set()
+    for op in summaries:
         report_date = _required_date(op.get("reportDate"), "OpenPosition.reportDate")
         if period_to is not None and report_date != period_to:
+            skipped_dates.add(report_date)
             continue
         if period_to is None and (report_date.month != 12 or report_date.day != 31):
+            skipped_dates.add(report_date)
             continue
         isin = op.get("isin", "")
         if not isin:
-            continue
+            raise ValueError(
+                f"Open position {op.get('symbol', '')!r} "
+                f"(assetCategory {op.get('assetCategory', '')!r}) has no ISIN; "
+                "positions without an ISIN are not supported."
+            )
         positions.append(
             OpenPosition(
                 isin=isin,
@@ -199,6 +213,17 @@ def _parse_positions(stmt, period_to: date | None = None) -> list[OpenPosition]:
                 sub_category=op.get("subCategory", ""),
             )
         )
+    if skipped_dates and not positions:
+        raise ValueError(
+            "No open positions are reported at the statement period end; found "
+            "only " + ", ".join(sorted(d.isoformat() for d in skipped_dates))
+        )
+    if skipped_dates:
+        warnings.warn(
+            "Ignoring open positions not reported at the statement period end: "
+            + ", ".join(sorted(d.isoformat() for d in skipped_dates)),
+            stacklevel=2,
+        )
     return positions
 
 
@@ -209,14 +234,53 @@ _INCOME_TYPES = {
     "Dividends",
     "Payment In Lieu Of Dividends",
 }
+# Tax-relevant cash flows this converter cannot report; failing beats omitting.
+_UNSUPPORTED_TYPES = {
+    "Bond Interest Received",
+    "Bond Interest Paid",
+    "871(m) Withholding",
+}
+# Capital movements and fees with no eCH-0196 income or withholding field.
+_IGNORED_TYPES = {
+    "Deposits/Withdrawals",
+    "Deposits & Withdrawals",
+    "Other Fees",
+    "Broker Fees",
+    "Advisor Fees",
+    "Commission Adjustments",
+}
 
 
 def _parse_cash_transactions(stmt) -> list[CashTransaction]:
+    rows = stmt.findall("CashTransactions/CashTransaction")
+    # SUMMARY rows aggregate DETAIL rows; counting both would double the income.
+    details = [ct for ct in rows if ct.get("levelOfDetail") != "SUMMARY"]
+    if rows and not details:
+        raise ValueError(
+            "CashTransactions contain only SUMMARY rows; enable the Detail level "
+            "of detail for Cash Transactions in the FlexQuery."
+        )
     txs = []
-    for ct in stmt.findall("CashTransactions/CashTransaction"):
+    unknown_types = set()
+    for ct in details:
         tx_type = ct.get("type", "")
-        if tx_type not in _INCOME_TYPES:
+        if tx_type in _UNSUPPORTED_TYPES:
+            raise ValueError(
+                f"Cash transaction type {tx_type!r} is not supported; it cannot "
+                "be reported in the eCH-0196 statement."
+            )
+        if tx_type in _IGNORED_TYPES:
             continue
+        if tx_type not in _INCOME_TYPES:
+            unknown_types.add(tx_type)
+            continue
+        if tx_type in ("Dividends", "Payment In Lieu Of Dividends") and not ct.get(
+            "isin"
+        ):
+            raise ValueError(
+                f"{tx_type} for {ct.get('symbol', '')!r} has no ISIN and cannot be "
+                "attributed to a security."
+            )
         settle = ct.get("settleDate", "") or ct.get("dateTime", "")
         txs.append(
             CashTransaction(
@@ -238,6 +302,12 @@ def _parse_cash_transactions(stmt) -> list[CashTransaction]:
                 model=ct.get("model", ""),
                 ex_date=_optional_date(ct.get("exDate"), "CashTransaction.exDate"),
             )
+        )
+    if unknown_types:
+        warnings.warn(
+            "Ignoring cash transactions of unrecognised type: "
+            + ", ".join(sorted(repr(t) for t in unknown_types)),
+            stacklevel=2,
         )
     return txs
 
