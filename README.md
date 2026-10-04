@@ -65,9 +65,11 @@ the latest official v2.2 schema and its eCH dependencies, using local
 `schemaLocation` references. It searches for `documentation/eCH-0196-2-2.xsd`
 beside `convert.py` or the Windows executable, then in the working directory.
 An existing cache is refreshed in place; otherwise the application directory is
-used, and superseded dependency folders are removed. If downloading fails, the
-cached copy is retained. Validation is explicitly skipped if `lxml` is absent or
-the main XSD is absent or unusable.
+used. After a successful refresh, superseded dependency folders older than one
+hour are removed, so runs in parallel do not delete each other's schemas. If
+downloading fails, the cached copy is retained. Validation is explicitly skipped
+if `lxml` or the main XSD is absent. If the cached XSD is unusable, the run fails
+without writing output; delete the `documentation` folder and rerun online.
 
 ## Usage
 

@@ -5,7 +5,9 @@ from __future__ import annotations
 import builtins
 import importlib
 import io
+import os
 import sys
+import time
 
 import pytest
 
@@ -223,6 +225,12 @@ def _schema_graph_download(url, timeout):
     return io.BytesIO(b'<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>')
 
 
+def _age_generations(directory):
+    old = time.time() - 2 * 3600
+    for path in directory.glob("ech-schemas-*"):
+        os.utime(path, (old, old))
+
+
 def test_repeated_refreshes_keep_only_current_schema_generation(monkeypatch, tmp_path):
     import convert
 
@@ -233,6 +241,7 @@ def test_repeated_refreshes_keep_only_current_schema_generation(monkeypatch, tmp
     unrelated.mkdir()
 
     for _ in range(3):
+        _age_generations(tmp_path)
         convert._download_xsd()
 
     generations = list(tmp_path.glob("ech-schemas-*"))
@@ -250,6 +259,7 @@ def test_single_file_refresh_removes_superseded_generation(monkeypatch, tmp_path
     stale = tmp_path / "ech-schemas-old"
     stale.mkdir()
     (stale / "dep.xsd").write_bytes(b"old")
+    _age_generations(tmp_path)
     content = b'<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>'
     monkeypatch.setattr(convert, "_find_xsd", lambda: xsd_path)
     monkeypatch.setattr(
@@ -260,6 +270,43 @@ def test_single_file_refresh_removes_superseded_generation(monkeypatch, tmp_path
 
     assert xsd_path.read_bytes() == content
     assert not stale.exists()
+
+
+def test_refresh_keeps_recent_generation_of_concurrent_run(monkeypatch, tmp_path):
+    import convert
+
+    xsd_path = tmp_path / "eCH-0196-2-2.xsd"
+    monkeypatch.setattr(convert, "_find_xsd", lambda: xsd_path)
+    monkeypatch.setattr(convert.urllib.request, "urlopen", _schema_graph_download)
+    # Another run has just installed its generation and may still be using it.
+    concurrent = tmp_path / "ech-schemas-concurrent"
+    concurrent.mkdir()
+    (concurrent / "dep.xsd").write_bytes(b"in use")
+
+    convert._download_xsd()
+
+    assert concurrent.is_dir()
+    assert len(list(tmp_path.glob("ech-schemas-*"))) == 2
+
+
+def test_truncated_download_keeps_cached_copy(monkeypatch, tmp_path, capsys):
+    import http.client
+
+    import convert
+
+    xsd_path = tmp_path / "eCH-0196-2-2.xsd"
+    xsd_path.write_text("cached", encoding="utf-8")
+    monkeypatch.setattr(convert, "_find_xsd", lambda: xsd_path)
+
+    def truncated(_url, timeout):
+        raise http.client.IncompleteRead(b"partial")
+
+    monkeypatch.setattr(convert.urllib.request, "urlopen", truncated)
+
+    convert._download_xsd()
+
+    assert xsd_path.read_text(encoding="utf-8") == "cached"
+    assert "using cached copy" in capsys.readouterr().out
 
 
 def test_failed_refresh_keeps_referenced_generation(monkeypatch, tmp_path):
@@ -443,9 +490,7 @@ def test_missing_external_xsd_is_explicit(monkeypatch, tmp_path, capsys):
     ],
     ids=["unresolved-import", "malformed"],
 )
-def test_unusable_xsd_skips_validation_explicitly(
-    monkeypatch, tmp_path, capsys, content
-):
+def test_unusable_xsd_fails_validation(monkeypatch, tmp_path, capsys, content):
     import xml.etree.ElementTree as ET
 
     import convert
@@ -455,5 +500,5 @@ def test_unusable_xsd_skips_validation_explicitly(
     xsd_path.write_text(content, encoding="utf-8")
     monkeypatch.setattr(convert, "_find_xsd", lambda: xsd_path)
 
-    assert convert._validate(ET.Element("unused"))
-    assert "unusable" in capsys.readouterr().out
+    assert not convert._validate(ET.Element("unused"))
+    assert "unusable" in capsys.readouterr().err

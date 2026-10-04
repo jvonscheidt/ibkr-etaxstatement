@@ -13,10 +13,12 @@ Options:
 from __future__ import annotations
 
 import argparse
+import http.client
 import os
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +36,9 @@ __version__ = "0.3.1"
 
 XSD_URL = "https://www.ech.ch/xmlns/eCH-0196/2.2/eCH-0196-2-2.xsd"
 XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema"
+# A concurrent run may have just pointed the root XSD at its own generation;
+# only generations older than this can no longer be in use.
+STALE_GENERATION_SECONDS = 3600
 
 
 def _schema_references(document: minidom.Document) -> Iterator[minidom.Element]:
@@ -121,7 +126,13 @@ def _download_xsd() -> None:
                 current = generation
         _remove_stale_generations(xsd_path.parent, current)
         print(f"XSD updated: {xsd_path}")
-    except (OSError, urllib.error.URLError, ExpatError, ValueError) as exc:
+    except (
+        OSError,
+        urllib.error.URLError,
+        http.client.HTTPException,
+        ExpatError,
+        ValueError,
+    ) as exc:
         if xsd_path.exists():
             print(f"Warning: XSD download failed ({exc}); using cached copy.")
         else:
@@ -129,8 +140,13 @@ def _download_xsd() -> None:
 
 
 def _remove_stale_generations(directory: Path, current: Path | None) -> None:
+    cutoff = time.time() - STALE_GENERATION_SECONDS
     for path in directory.glob("ech-schemas-*"):
-        if path.is_dir() and path != current:
+        try:
+            stale = path.is_dir() and path != current and path.stat().st_mtime < cutoff
+        except OSError:
+            continue
+        if stale:
             shutil.rmtree(path, ignore_errors=True)
 
 
@@ -167,9 +183,13 @@ def _validate(root: ET.Element) -> bool:
     try:
         schema = lxml_et.XMLSchema(lxml_et.parse(str(xsd_path)))
     except (OSError, lxml_et.XMLSyntaxError, lxml_et.XMLSchemaParseError) as exc:
-        print(f"XSD at {xsd_path} is unusable ({exc}) — skipping validation")
-        print("Delete the documentation folder and rerun online to refresh it.")
-        return True
+        # A broken cache must not let unvalidated output through.
+        print(f"Error: XSD at {xsd_path} is unusable ({exc}).", file=sys.stderr)
+        print(
+            "Delete the documentation folder and rerun online to refresh it.",
+            file=sys.stderr,
+        )
+        return False
     xml_str = serialize(root)
     doc = lxml_et.fromstring(xml_str.encode())
     if schema.validate(doc):
@@ -231,9 +251,7 @@ def main() -> int:
         return 1
 
     if not _validate(root):
-        print(
-            "Error: generated XML is invalid; no output was written.", file=sys.stderr
-        )
+        print("Error: XSD validation failed; no output was written.", file=sys.stderr)
         return 1
 
     output_path = Path(args.output)
