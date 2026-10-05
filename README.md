@@ -103,6 +103,18 @@ dates and rejects partial-year exports. Export **one account in one
 FlexStatement per file**; multi-statement exports are rejected rather than
 silently omitting accounts.
 
+Enable the **Summary** level of detail for Open Positions and the **Detail**
+level for Cash Transactions; Summary cash rows are ignored so income is not
+counted twice. Include `ibEntity` in Account Information: it sets the bank
+account country (IB-UK → GB, IB-LLC → US, IB-IE → IE, …), and an unknown or
+missing entity falls back to GB with a warning.
+
+Tax data the converter cannot report stops conversion with an error instead of
+being left out: open positions without an ISIN (for example options or
+futures), bond interest, `871(m) Withholding`, and dividends without an ISIN.
+Deposits and fees are ignored; other unrecognised cash transaction types
+produce a warning.
+
 ### Historical dividend quantities
 
 Enable **ISIN, Currency, Quantity, Ex Date, Pay Date, Gross Amount**, and the
@@ -146,11 +158,16 @@ on cash interest is therefore preserved in XML payment annotations, with a
 warning, rather than included in Swiss claims or securities-tax totals.
 
 Withholding refunds are signed adjustments, converted on their own booking
-dates; they reduce the corresponding tax totals. Payments in different
-currencies remain separate, but Swiss income classification uses same-day
-withholding debits regardless of currency; refunds alone do not reclassify new
-positive income. Unmatched Swiss withholding produces a
-warning to confirm the income's A/B classification manually.
+dates; they reduce the corresponding tax totals. A withholding row is linked to
+same-day income when none of the identifiers both rows report (action ID,
+contract, model, ex-date) differ, since IBKR may omit the ex-date or action ID
+on tax rows; refunds need a shared action ID or ex-date. Tax in the income's
+currency is reported on the income's own payment. Payments in different
+currencies remain separate, but Swiss withholding still classifies its linked
+income as `grossRevenueA` regardless of currency. Other income on the same day,
+such as a withholding-free distribution, stays `grossRevenueB`, and refunds
+alone do not reclassify new positive income. Unmatched or ambiguous Swiss
+withholding produces a warning to confirm the A/B classification manually.
 Multiple holdings with the same ISIN are
 consolidated in the first listing's currency so their combined value is retained
 and dividend income is reported only once.
@@ -170,8 +187,13 @@ The barcode PDF compresses the eCH-0196 XML with ZLIB, encodes it as PDF417
 Structured Append (13×35, EC level 4, native 290×35 px, 4-integer Macro file id
 per BEIL2 §2.2), and lays out a portrait statement page followed by rotated
 barcode sheet(s). These details were confirmed by decoding real accepted
-reference statements; see [`CLAUDE.md`](CLAUDE.md) for the full technical notes
+reference statements; see [`AGENTS.md`](AGENTS.md) for the full technical notes
 and links to the eCH-0196 / eCH-0270 specifications.
+
+The statement page uses the built-in Helvetica font, which only covers cp1252:
+letters outside it print as their base letter (`Dvořák` → `Dvorák`), while the
+XML keeps the exact text. Its totals list security income, account interest
+and debt interest separately, so they reconcile with the statement totals.
 
 ## Tests
 
@@ -227,10 +249,10 @@ To prepare and validate assets locally without publishing (use a fresh output
 directory):
 
 ```powershell
-python .github\scripts\prepare_release.py --tag v0.3.1
+python .github\scripts\prepare_release.py --tag v0.4.0
 python -m PyInstaller --noconfirm --clean ibkr-etaxstatement.spec
-python .github\scripts\prepare_release.py --tag v0.3.1 --installer dist\ibkr-etaxstatement.exe --output dist\release-0.3.1
-winget validate --manifest dist\release-0.3.1\winget
+python .github\scripts\prepare_release.py --tag v0.4.0 --installer dist\ibkr-etaxstatement.exe --output dist\release-0.4.0
+winget validate --manifest dist\release-0.4.0\winget
 ```
 
 Once ready, push a new version tag to trigger publication. No release is created
