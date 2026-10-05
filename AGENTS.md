@@ -108,6 +108,15 @@ dividend income.
 `--barcode-pdf` creates human-readable portrait pages first, then landscape
 2D-barcode sheets. eCH-0270 section 2.2.4 puts 2D barcodes last.
 
+### Human-readable pages
+
+- Helvetica encodes only cp1252: fold other letters to their base letter
+  (`ř` to `r`), never print them as boxes; the XML keeps exact text
+- Fit cells to their column: truncate names with `…`, shrink numbers
+- Break totals into securities, account interest and debt interest so they
+  reconcile with the root totals; keep the last page's rows few enough for
+  the totals block
+
 ### 1D Code 128
 
 Every page gets 16 digits:

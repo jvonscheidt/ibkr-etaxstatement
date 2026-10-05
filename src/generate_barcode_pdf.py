@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import unicodedata
 import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
@@ -27,6 +28,7 @@ from reportlab.graphics.barcode.code128 import Code128
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import cm, mm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 from .generate_ech196 import IBKR_CLEARING_NUMBER, NS
@@ -159,14 +161,123 @@ def _statement_securities(root: ET.Element) -> list[dict]:
 
 # Portrait statement-page layout (points; reportlab origin = bottom-left)
 _ST_ROWS_PER_PAGE = 30
-_ST_COLS = (  # (label, x in cm from left, right-aligned?)
-    ("Pos", 2.0, False),
-    ("Bezeichnung", 3.0, False),
-    ("ISIN", 10.5, False),
-    ("Whrg", 14.0, False),
-    ("Anzahl", 16.2, True),
-    ("Steuerwert CHF", 19.0, True),
+# The last page also holds the totals block, so it takes fewer rows.
+_ST_ROWS_WITH_TOTALS = 26
+_ST_COLS = (  # (label, x in cm from left, right-aligned?, max width in cm)
+    ("Pos", 2.0, False, 0.9),
+    ("Bezeichnung", 3.0, False, 7.2),
+    ("ISIN", 10.5, False, 2.5),
+    ("Whrg", 13.2, False, 0.8),
+    ("Anzahl", 16.6, True, 2.3),
+    ("Steuerwert CHF", 19.0, True, 2.2),
 )
+_ST_TEXT_W_CM = 17.0  # between the 2 cm side margins
+_MIN_FONT_SIZE = 5.0
+
+# Letters without a Unicode decomposition to fold before cp1252 encoding.
+_TRANSLITERATIONS = str.maketrans(
+    {"Ł": "L", "ł": "l", "Đ": "D", "đ": "d", "Ħ": "H", "ħ": "h", "ı": "i"}
+)
+
+
+def _printable(text: str) -> str:
+    """Fold text to cp1252, the only encoding the standard Helvetica font has.
+
+    Letters outside it would render as black boxes; keep their base letter
+    instead (Dvořák -> Dvorák). The XML keeps the exact names.
+    """
+    chars = []
+    for char in text.translate(_TRANSLITERATIONS):
+        try:
+            char.encode("cp1252")
+        except UnicodeEncodeError:
+            decomposed = unicodedata.normalize("NFKD", char)
+            char = "".join(c for c in decomposed if not unicodedata.combining(c))
+            try:
+                char.encode("cp1252")
+            except UnicodeEncodeError:
+                char = "?"
+        chars.append(char or "?")
+    return "".join(chars)
+
+
+def _truncated(text: str, font: str, size: float, max_width: float) -> str:
+    if stringWidth(text, font, size) <= max_width:
+        return text
+    while text and stringWidth(text + "…", font, size) > max_width:
+        text = text[:-1]
+    return text.rstrip() + "…"
+
+
+def _draw_cell(
+    c: canvas.Canvas,
+    x_cm: float,
+    y: float,
+    text: str,
+    font: str,
+    size: float,
+    right: bool = False,
+    max_width_cm: float = _ST_TEXT_W_CM,
+) -> None:
+    """Draw text within its column: shrink numbers, truncate everything else."""
+    text = _printable(text)
+    max_width = max_width_cm * cm
+    if right:
+        while size > _MIN_FONT_SIZE and stringWidth(text, font, size) > max_width:
+            size -= 0.5
+        c.setFont(font, size)
+        c.drawRightString(x_cm * cm, y, text)
+    else:
+        c.setFont(font, size)
+        c.drawString(x_cm * cm, y, _truncated(text, font, size, max_width))
+
+
+def _statement_chunks(secs: list[dict]) -> list[list[dict]]:
+    """Split rows into pages, leaving room for the totals on the last one."""
+    chunks = [
+        secs[i : i + _ST_ROWS_PER_PAGE] for i in range(0, len(secs), _ST_ROWS_PER_PAGE)
+    ] or [[]]
+    if len(chunks[-1]) > _ST_ROWS_WITH_TOTALS:
+        chunks.append([])
+    return chunks
+
+
+def _statement_totals(root: ET.Element) -> list[tuple[str, str]]:
+    """Totals with the account and debt interest the security rows omit.
+
+    The root totals include bank-account interest, which is not one of the
+    listed securities, so show its share separately for the page to reconcile.
+    """
+    securities = root.find(_q("listOfSecurities"))
+    banks = root.find(_q("listOfBankAccounts"))
+    liabilities = root.find(_q("listOfLiabilities"))
+
+    def total(element: ET.Element | None, attribute: str) -> str:
+        return element.get(attribute, "0.00") if element is not None else "0.00"
+
+    lines = [
+        ("Bruttoertrag A Wertschriften CHF", total(securities, "totalGrossRevenueA")),
+        ("Bruttoertrag B Wertschriften CHF", total(securities, "totalGrossRevenueB")),
+    ]
+    if banks is not None:
+        lines.append(
+            ("Bruttoertrag B Kontozinsen CHF", total(banks, "totalGrossRevenueB"))
+        )
+    lines += [
+        ("Total Bruttoertrag A CHF", root.get("totalGrossRevenueA", "")),
+        ("Total Bruttoertrag B CHF", root.get("totalGrossRevenueB", "")),
+        (
+            "Total Verrechnungssteueranspruch CHF",
+            root.get("totalWithHoldingTaxClaim", ""),
+        ),
+        (
+            "Ausländische Quellensteuer Wertschriften CHF",
+            total(securities, "totalLumpSumTaxCredit"),
+        ),
+    ]
+    if liabilities is not None:
+        lines.append(("Schuldzinsen CHF", total(liabilities, "totalGrossRevenueB")))
+    return lines
 
 
 def _draw_statement_pages(
@@ -196,89 +307,66 @@ def _draw_statement_pages(
         client_no = client.get("clientNumber", "")
 
     secs = _statement_securities(root)
-    n_pages = max(1, (len(secs) + _ST_ROWS_PER_PAGE - 1) // _ST_ROWS_PER_PAGE)
+    chunks = _statement_chunks(secs)
+    regular, bold = "Helvetica", "Helvetica-Bold"
 
     page_num = page_num_start
-    for pi in range(n_pages):
+    first_pos = 1
+    for pi, chunk in enumerate(chunks):
         _draw_code128(
             c, page_w_cm, page_h_cm, page_num, has_2d=False, form=_CODE128_FORM_TEXT
         )
 
         y = h_pt - 3.8 * cm  # below the top 1D barcode
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(2 * cm, y, "E-Steuerauszug – Wertschriftenverzeichnis")
+        _draw_cell(c, 2, y, "E-Steuerauszug – Wertschriftenverzeichnis", bold, 14)
         y -= 0.9 * cm
 
-        c.setFont("Helvetica", 9)
         for line in (
             f"Institut: {inst_name}",
             f"Kunde: {client_name}   Kundennummer: {client_no}",
             f"Steuerperiode: {root.get('taxPeriod', '')}   Kanton: {root.get('canton', '')}",
             f"Dokument-ID: {root.get('id', '')}",
         ):
-            c.drawString(2 * cm, y, line)
+            _draw_cell(c, 2, y, line, regular, 9)
             y -= 0.5 * cm
 
         y -= 0.3 * cm
-        c.setFont("Helvetica-Bold", 8)
-        for label, x_cm, right in _ST_COLS:
-            if right:
-                c.drawRightString(x_cm * cm, y, label)
-            else:
-                c.drawString(x_cm * cm, y, label)
+        for label, x_cm, right, width_cm in _ST_COLS:
+            _draw_cell(c, x_cm, y, label, bold, 8, right, width_cm)
         y -= 0.15 * cm
         c.line(2 * cm, y, page_w_cm * cm - 2 * cm, y)
         y -= 0.5 * cm
 
-        chunk = secs[pi * _ST_ROWS_PER_PAGE : (pi + 1) * _ST_ROWS_PER_PAGE]
-        c.setFont("Helvetica", 8)
-        for i, s in enumerate(chunk, start=pi * _ST_ROWS_PER_PAGE + 1):
-            cells = [str(i), s["name"][:48], s["isin"], s["ccy"], s["qty"], s["value"]]
-            for (label, x_cm, right), text in zip(_ST_COLS, cells):
-                if right:
-                    c.drawRightString(x_cm * cm, y, text)
-                else:
-                    c.drawString(x_cm * cm, y, text)
+        for i, s in enumerate(chunk, start=first_pos):
+            cells = [str(i), s["name"], s["isin"], s["ccy"], s["qty"], s["value"]]
+            for (_label, x_cm, right, width_cm), text in zip(_ST_COLS, cells):
+                _draw_cell(c, x_cm, y, text, regular, 8, right, width_cm)
             y -= 0.5 * cm
+        first_pos += len(chunk)
 
         # Totals on the last statement page
-        if pi == n_pages - 1:
+        if pi == len(chunks) - 1:
             y -= 0.2 * cm
             c.line(2 * cm, y, page_w_cm * cm - 2 * cm, y)
             y -= 0.55 * cm
-            c.setFont("Helvetica-Bold", 8)
-            c.drawString(3 * cm, y, "Total Steuerwert CHF")
-            c.drawRightString(19.0 * cm, y, root.get("totalTaxValue", ""))
+            _draw_cell(c, 3, y, "Total Steuerwert CHF", bold, 8)
+            _draw_cell(c, 19.0, y, root.get("totalTaxValue", ""), bold, 8, True, 2.2)
             y -= 0.5 * cm
-            c.setFont("Helvetica", 8)
-            securities = root.find(_q("listOfSecurities"))
-            foreign_tax = (
-                securities.get("totalLumpSumTaxCredit", "0.00")
-                if securities is not None
-                else "0.00"
-            )
-            for label, value in (
-                ("Total Bruttoertrag A CHF", root.get("totalGrossRevenueA", "")),
-                ("Total Bruttoertrag B CHF", root.get("totalGrossRevenueB", "")),
-                (
-                    "Total Verrechnungssteueranspruch CHF",
-                    root.get("totalWithHoldingTaxClaim", ""),
-                ),
-                ("Ausländische Quellensteuer Wertschriften CHF", foreign_tax),
-            ):
-                c.drawString(3 * cm, y, label)
-                c.drawRightString(19.0 * cm, y, value)
+            for label, value in _statement_totals(root):
+                _draw_cell(c, 3, y, label, regular, 8, max_width_cm=13.5)
+                _draw_cell(c, 19.0, y, value, regular, 8, True, 2.2)
                 y -= 0.45 * cm
-            c.drawString(3 * cm, y, "DA-1-Anspruch nicht ermittelt; manuell prüfen.")
-            y -= 0.45 * cm
-            c.drawString(
-                3 * cm, y, "Quellensteuer auf Kontozinsen: siehe XML-Zahlungsnotizen."
-            )
+            for note in (
+                "DA-1-Anspruch nicht ermittelt; manuell prüfen.",
+                "Quellensteuer auf Kontozinsen: siehe XML-Zahlungsnotizen.",
+            ):
+                _draw_cell(c, 3, y, note, regular, 8)
+                y -= 0.45 * cm
 
         c.showPage()
         page_num += 1
 
-    return n_pages
+    return len(chunks)
 
 
 def _draw_barcode_page(
