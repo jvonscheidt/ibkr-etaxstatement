@@ -379,7 +379,10 @@ def parse(xml_path: str) -> IBKRData:
 
     period_from = _optional_date(stmt.get("fromDate"), "FlexStatement.fromDate")
     period_to = _optional_date(stmt.get("toDate"), "FlexStatement.toDate")
-    account = _parse_account(stmt.find("AccountInformation"))
+    account_elem = stmt.find("AccountInformation")
+    if account_elem is None:
+        raise ValueError("No AccountInformation found in FlexStatement")
+    account = _parse_account(account_elem)
 
     return IBKRData(
         account=account,

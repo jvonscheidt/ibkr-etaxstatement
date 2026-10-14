@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -51,23 +52,27 @@ class TestExchangeRateFormatting:
 
 class TestFxToChf:
     def test_chf_is_identity(self, fx_rates):
-        assert _fx_to_chf("CHF", YEAR_END, fx_rates) == 1.0
+        assert _fx_to_chf("CHF", YEAR_END, fx_rates) == Decimal(1)
 
     def test_chf_needs_no_conversion_rates(self):
-        assert _fx_to_chf("CHF", YEAR_END, {}) == 1.0
+        assert _fx_to_chf("CHF", YEAR_END, {}) == Decimal(1)
 
     def test_eur_to_chf_is_reciprocal(self, fx_rates):
         # EUR->CHF = 1 / (CHF->EUR) = 1 / 1.074
-        assert _fx_to_chf("EUR", YEAR_END, fx_rates) == pytest.approx(1 / 1.074)
+        assert _fx_to_chf("EUR", YEAR_END, fx_rates) == Decimal(1) / Decimal("1.074")
 
     def test_usd_to_chf_via_eur(self, fx_rates):
         # USD->CHF = (USD->EUR) / (CHF->EUR)
-        assert _fx_to_chf("USD", YEAR_END, fx_rates) == pytest.approx(0.85135 / 1.074)
+        assert _fx_to_chf("USD", YEAR_END, fx_rates) == (
+            Decimal("0.85135") / Decimal("1.074")
+        )
 
     def test_walks_back_to_earlier_rate(self):
         rates = {(date(2025, 12, 29), "CHF", "EUR"): 1.07}
         # Query on the 31st; nearest earlier rate within 5 days is the 29th.
-        assert _fx_to_chf("EUR", date(2025, 12, 31), rates) == pytest.approx(1 / 1.07)
+        assert _fx_to_chf("EUR", date(2025, 12, 31), rates) == (
+            Decimal(1) / Decimal("1.07")
+        )
 
     def test_missing_chf_rate_raises(self):
         with pytest.raises(ValueError):

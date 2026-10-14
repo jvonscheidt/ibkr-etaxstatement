@@ -171,6 +171,7 @@ def test_income_from_security_sold_before_year_end_is_reported():
     security = root.find(f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}")
     assert security is not None
     assert security.get("isin") == isin
+    assert security.get("securityName") == "AAPL CASH DIVIDEND"
     assert security.find(_q("taxValue")) is None
     payment = security.find(_q("payment"))
     assert payment.get("quantity") == "12.5"
@@ -188,3 +189,50 @@ def test_income_from_security_sold_before_year_end_is_reported():
         schema = lxml_etree.XMLSchema(lxml_etree.parse(str(XSD_PATH)))
         document = lxml_etree.fromstring(serialize(root).encode())
         assert schema.validate(document), str(schema.error_log)
+
+
+@pytest.mark.parametrize(
+    ("description", "expected_type"),
+    [
+        ("ISHARES CORE MSCI WORLD ACC", "FUND.ACCUMULATION"),
+        ("VANGUARD FTSE ALL-WORLD DIST", "FUND.DISTRIBUTION"),
+    ],
+)
+def test_sold_etf_security_type_uses_description_tokens(description, expected_type):
+    from src.generate_ech196 import build
+    from src.parse_ibkr import AccountInfo, IBKRData
+
+    isin = "IE00B4L5Y983"
+    pay_date = date(2025, 5, 15)
+    dividend = CashTransaction(
+        pay_date,
+        "USD",
+        0.85,
+        10.0,
+        "Dividends",
+        description,
+        isin,
+        "ETF",
+        sub_category="ETF",
+    )
+    data = IBKRData(
+        AccountInfo("U1", "A B", "A", "B", "ZH", "EUR", "IB-UK"),
+        [],
+        [dividend],
+        {
+            (pay_date, "CHF", "EUR"): 1.07,
+            (pay_date, "USD", "EUR"): 0.85,
+        },
+        period_from=date(2025, 1, 1),
+        period_to=date(2025, 12, 31),
+        dividend_accruals=[
+            DividendAccrual(
+                isin, "USD", date(2025, 5, 1), pay_date, Decimal(10), Decimal(10)
+            )
+        ],
+    )
+
+    root = build(data)
+    security = root.find(f"{_q('listOfSecurities')}/{_q('depot')}/{_q('security')}")
+    assert security.get("securityName") == description
+    assert security.get("securityType") == expected_type

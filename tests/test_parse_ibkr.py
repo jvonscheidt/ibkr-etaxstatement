@@ -279,3 +279,14 @@ def test_multiple_statements_are_rejected(tmp_path, second_account):
 
     with pytest.raises(ValueError, match="Multiple FlexStatements"):
         parse(str(path))
+
+
+def test_missing_account_information_is_rejected(tmp_path):
+    xml = """<FlexQueryResponse><FlexStatements>
+      <FlexStatement fromDate="01/01/2025" toDate="31/12/2025"/>
+    </FlexStatements></FlexQueryResponse>"""
+    path = tmp_path / "no_account.xml"
+    path.write_text(xml, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="No AccountInformation"):
+        parse(str(path))

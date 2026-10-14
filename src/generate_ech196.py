@@ -79,9 +79,9 @@ def _chf(value: float | Decimal) -> str:
     return str(_round_chf(value))
 
 
-def _exchange_rate(rate: float) -> str:
+def _exchange_rate(rate: float | Decimal) -> str:
     """Keep at least 6 decimals and 6 significant digits, without exponents."""
-    value = Decimal(str(rate))
+    value = rate if isinstance(rate, Decimal) else Decimal(str(rate))
     exponent = min(-6, value.adjusted() - 5)
     rounded = value.quantize(Decimal(1).scaleb(exponent), rounding=ROUND_HALF_UP)
     text = format(rounded.normalize(), "f")
@@ -103,7 +103,7 @@ def _security_country(isin: str, issuer_country: str) -> str:
     return isin[:2].upper() if len(isin) >= 2 and isin[:2].isalpha() else "XX"
 
 
-def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> float:
+def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> Decimal:
     """
     Return the exchange rate: 1 unit of `currency` = X CHF.
 
@@ -112,10 +112,10 @@ def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> float:
     For any other currency: currency→CHF = (currency→EUR) / (CHF→EUR).
     """
     if currency == "CHF":
-        return 1.0
+        return Decimal(1)
 
     # Find the closest available rate on or before ref_date
-    def _rate(from_c: str, to_c: str) -> float | None:
+    def _rate(from_c: str, to_c: str) -> Decimal | None:
         # Try exact date first, then walk back up to 5 trading days
         from datetime import timedelta
 
@@ -123,7 +123,7 @@ def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> float:
             d = ref_date - timedelta(days=delta)
             r = fx_rates.get((d, from_c, to_c))
             if r is not None:
-                return r
+                return r if isinstance(r, Decimal) else Decimal(str(r))
         return None
 
     chf_eur = _rate("CHF", "EUR")
@@ -131,7 +131,7 @@ def _fx_to_chf(currency: str, ref_date: date, fx_rates: dict) -> float:
         raise ValueError(f"No CHF→EUR rate found near {ref_date}")
 
     if currency == "EUR":
-        return 1.0 / chf_eur
+        return Decimal(1) / chf_eur
 
     cur_eur = _rate(currency, "EUR")
     if cur_eur is None:
@@ -159,26 +159,32 @@ _ACC_TOKENS = re.compile(r"\b(?:ACC|1C|ACCUM\w*)\b")
 _DIST_TOKENS = re.compile(r"\b(?:DIST\w*|INC|INCOME)\b")
 
 
-def _security_type(pos: OpenPosition) -> str | None:
+def _security_type(
+    sec: OpenPosition | CashTransaction,
+    *,
+    category: str | None = None,
+    default: str = "FUND.ACCUMULATION",
+) -> str | None:
     """Guess accumulation vs distribution from ETF name.
 
     Only applicable to FUND-category securities (eCH-196 has a separate
     SHARE.* enumeration for stocks); returns None otherwise so the optional
     `securityType` attribute is simply omitted.
     """
-    if _security_category(pos) != "FUND":
+    resolved_category = category or _security_category(sec)
+    if resolved_category != "FUND":
         return None
-    name_upper = pos.description.upper()
+    name_upper = (sec.description or sec.symbol).upper()
     if _ACC_TOKENS.search(name_upper):
         return "FUND.ACCUMULATION"
     if _DIST_TOKENS.search(name_upper):
         return "FUND.DISTRIBUTION"
     warnings.warn(
         f"Could not determine accumulating/distributing status for "
-        f"{pos.description!r} (ISIN {pos.isin}); defaulting to FUND.ACCUMULATION.",
+        f"{sec.description or sec.symbol!r} (ISIN {sec.isin}); defaulting to {default}.",
         stacklevel=2,
     )
-    return "FUND.ACCUMULATION"
+    return default
 
 
 def _statement_period(data: IBKRData) -> tuple[date, date]:
@@ -235,15 +241,18 @@ def _build_securities(
         # their combined CHF value rather than duplicating their cash flows.
         balance = sum(
             (
-                p.position_value
-                if p.currency == pos.currency
-                else p.position_value
-                * _fx_to_chf(p.currency, year_end, valuation_fx_rates)
-                / rate
-            )
-            for p in positions
+                (
+                    Decimal(str(p.position_value))
+                    if p.currency == pos.currency
+                    else Decimal(str(p.position_value))
+                    * _fx_to_chf(p.currency, year_end, valuation_fx_rates)
+                    / rate
+                )
+                for p in positions
+            ),
+            Decimal(0),
         )
-        chf_value = _round_chf(Decimal(str(balance)) * Decimal(str(rate)))
+        chf_value = _round_chf(balance * rate)
 
         sec_attrs = {
             "positionId": str(idx),
@@ -274,7 +283,7 @@ def _build_securities(
         if len(positions) == 1:
             tax_value.set("unitPrice", _chf(pos.mark_price))
         elif quantity:
-            tax_value.set("unitPrice", _chf(Decimal(str(balance)) / quantity))
+            tax_value.set("unitPrice", _chf(balance / quantity))
 
         # Payments linked to this security
         income_txs = income_by_isin.get(pos.isin, [])
@@ -300,11 +309,16 @@ def _build_securities(
             "currency": representative.currency,
             "quotationType": "PIECE",
             "securityCategory": category,
-            "securityName": (representative.symbol or isin)[:60],
+            "securityName": (
+                representative.description or representative.symbol or isin
+            )[:60],
             "isin": isin,
         }
-        if category == "FUND":
-            sec_attrs["securityType"] = "FUND.DISTRIBUTION"
+        sec_type = _security_type(
+            representative, category=category, default="FUND.DISTRIBUTION"
+        )
+        if sec_type is not None:
+            sec_attrs["securityType"] = sec_type
         sec_el = ET.SubElement(depot_el, _q("security"), **sec_attrs)
         _build_security_payments(
             sec_el, income_txs, wht_txs, data.fx_rates, data.dividend_accruals
@@ -396,8 +410,8 @@ def _build_security_payments(
         gross = income.get(key, Decimal(0))
         tax = withholding.get(key, Decimal(0))
         rate = _fx_to_chf(currency, pay_date, fx_rates)
-        gross_chf = _chf(gross * Decimal(str(rate)))
-        tax_chf = _chf(tax * Decimal(str(rate)))
+        gross_chf = _chf(gross * rate)
+        tax_chf = _chf(tax * rate)
         # Refunds can reverse A income, but do not move new positive income to A.
         revenue_a = swiss and (key in charged or (gross < 0 and key in refunded))
 
@@ -458,7 +472,7 @@ def _build_bank_accounts(data: IBKRData, country: str) -> ET.Element:
         # One payment per interest-received event
         for tx in sorted(income_txs, key=lambda t: t.settle_date):
             rate = _fx_to_chf(tx.currency, tx.settle_date, data.fx_rates)
-            rev_b_chf = _round_chf(Decimal(str(tx.amount)) * Decimal(str(rate)))
+            rev_b_chf = _round_chf(Decimal(str(tx.amount)) * rate)
             acct_rev_b += rev_b_chf
             ET.SubElement(
                 ba_el,
@@ -484,7 +498,7 @@ def _build_bank_accounts(data: IBKRData, country: str) -> ET.Element:
         for tx in sorted(wht_txs, key=lambda t: t.settle_date):
             rate = _fx_to_chf(ccy, tx.settle_date, data.fx_rates)
             tax = -Decimal(str(tx.amount))
-            tax_chf = _chf(tax * Decimal(str(rate)))
+            tax_chf = _chf(tax * rate)
             ET.SubElement(
                 ba_el,
                 _q("payment"),
@@ -542,8 +556,10 @@ def _build_liabilities(data: IBKRData, country: str) -> ET.Element:
         acct_rev_b = Decimal(0)
         for tx in sorted(txs, key=lambda t: t.settle_date):
             rate = _fx_to_chf(tx.currency, tx.settle_date, data.fx_rates)
-            amount = -tx.amount  # "Broker Interest Paid" amounts are negative
-            rev_b_chf = _round_chf(Decimal(str(amount)) * Decimal(str(rate)))
+            amount = -Decimal(
+                str(tx.amount)
+            )  # "Broker Interest Paid" amounts are negative
+            rev_b_chf = _round_chf(amount * rate)
             acct_rev_b += rev_b_chf
             ET.SubElement(
                 la_el,
@@ -581,7 +597,7 @@ def build(data: IBKRData, eur_chf_override: float | None = None) -> ET.Element:
         if not math.isfinite(eur_chf_override) or eur_chf_override <= 0:
             raise ValueError("EUR-to-CHF valuation rate must be finite and positive")
         # Inject a synthetic CHF→EUR rate for the statement year-end.
-        chf_eur = 1.0 / eur_chf_override
+        chf_eur = Decimal(1) / Decimal(str(eur_chf_override))
         valuation_fx_rates = dict(data.fx_rates)
         valuation_fx_rates[(year_end, "CHF", "EUR")] = chf_eur
 
