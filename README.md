@@ -249,10 +249,10 @@ To prepare and validate assets locally without publishing (use a fresh output
 directory):
 
 ```powershell
-python .github\scripts\prepare_release.py --tag v0.4.0
+python .github\scripts\prepare_release.py --tag v0.4.1
 python -m PyInstaller --noconfirm --clean ibkr-etaxstatement.spec
-python .github\scripts\prepare_release.py --tag v0.4.0 --installer dist\ibkr-etaxstatement.exe --output dist\release-0.4.0
-winget validate --manifest dist\release-0.4.0\winget
+python .github\scripts\prepare_release.py --tag v0.4.1 --installer dist\ibkr-etaxstatement.exe --output dist\release-0.4.1
+winget validate --manifest dist\release-0.4.1\winget
 ```
 
 Once ready, push a new version tag to trigger publication. No release is created
