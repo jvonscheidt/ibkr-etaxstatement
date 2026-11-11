@@ -8,17 +8,40 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+    # Skip releases younger than a week: most compromised or broken releases
+    # are pulled within days.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore"
+      include: "scope"
+    groups:
+      actions:
+        patterns:
+          - "*"
 
-  # Bumps the pinned lint tools in requirements-dev.txt. Runtime requirements
-  # use minimum versions and are left alone.
+  # Bumps the pinned lint and test tools in requirements-dev.txt. Runtime
+  # requirements use minimum versions and are left alone.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
     allow:
       - dependency-name: "black"
+      - dependency-name: "pytest"
       - dependency-name: "ruff"
     commit-message:
       prefix: "chore"
+      include: "scope"
+    groups:
+      # One PR, since a Black or Ruff bump can come with reformatting or new
+      # lint findings.
+      dev-tools:
+        patterns:
+          - "black"
+          - "pytest"
+          - "ruff"
