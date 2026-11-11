@@ -95,14 +95,12 @@ submit({github, context, core}).then(
 
 def run_submit(scenario=None, tag="v0.3.1", manifest_directory=True):
     scenario = {
-        "manifests": {
-            name: (
-                f"PackageIdentifier: {IDENTIFIER}\n"
-                f"PackageVersion: {VERSION}\n"
-                "# generated artifact, not the checked-in template\n"
-            )
-            for name in FILENAMES
-        },
+        "manifests": dict.fromkeys(
+            FILENAMES,
+            f"PackageIdentifier: {IDENTIFIER}\n"
+            f"PackageVersion: {VERSION}\n"
+            "# generated artifact, not the checked-in template\n",
+        ),
         **(scenario or {}),
     }
     environment = {
@@ -210,9 +208,9 @@ def test_missing_manifest_environment_never_falls_back_to_checked_in_files():
         {"isDirectory": False},
         {"nonFile": FILENAMES[0]},
         {"manifests": {}},
-        {"manifests": {name: "" for name in FILENAMES[:2]}},
-        {"manifests": {name: "" for name in [*FILENAMES, "unexpected.yaml"]}},
-        {"manifests": {name: "" for name in [*FILENAMES[:2], "wrong.yaml"]}},
+        {"manifests": dict.fromkeys(FILENAMES[:2], "")},
+        {"manifests": dict.fromkeys([*FILENAMES, "unexpected.yaml"], "")},
+        {"manifests": dict.fromkeys([*FILENAMES[:2], "wrong.yaml"], "")},
     ],
 )
 def test_invalid_manifest_directory_fails_before_api_calls(scenario):
@@ -238,10 +236,9 @@ def test_invalid_manifest_directory_fails_before_api_calls(scenario):
     ],
 )
 def test_invalid_manifest_fields_fail_before_api_calls(filename, key, replacement):
-    manifests = {
-        name: f"PackageIdentifier: {IDENTIFIER}\nPackageVersion: {VERSION}\n"
-        for name in FILENAMES
-    }
+    manifests = dict.fromkeys(
+        FILENAMES, f"PackageIdentifier: {IDENTIFIER}\nPackageVersion: {VERSION}\n"
+    )
     expected = VERSION if key == "PackageVersion" else IDENTIFIER
     manifests[filename] = manifests[filename].replace(f"{key}: {expected}", replacement)
     result = run_submit({"manifests": manifests})
