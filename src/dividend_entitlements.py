@@ -37,7 +37,7 @@ def linked_income_keys(
         if income[0] != key[0]:
             continue
         # Identifiers: action ID, conid, model, ex-date.
-        pairs = list(zip(key[2:], income[2:]))
+        pairs = list(zip(key[2:], income[2:], strict=True))
         if any(ours and theirs and ours != theirs for ours, theirs in pairs):
             continue
         shared_action = bool(key[2]) and key[2] == income[2]

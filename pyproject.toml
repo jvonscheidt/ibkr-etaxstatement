@@ -4,8 +4,28 @@ target-version = ["py312"]
 [tool.ruff]
 target-version = "py312"
 
+# Rules are selected explicitly so the lint gate doesn't depend on Ruff's
+# default rule set, which changed in 0.16. A Ruff upgrade can still add new
+# rules inside these families; those show up in the Dependabot PR's CI run.
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9", "F",  # pycodestyle errors + pyflakes (Ruff's old defaults)
+    "B",     # flake8-bugbear: likely bugs
+    "BLE",   # blind `except Exception`
+    "C4",    # unnecessary comprehensions / dict() calls
+    "DTZ",   # naive datetimes
+    "RUF",   # Ruff-specific checks
+    "S110",  # try/except/pass
+    "SIM",   # simplifications
+    "UP",    # pyupgrade for Python 3.12
+]
+# Typographic characters used on purpose: "×" in dimension comments and the
+# en dash in the German statement title (cp1252 covers it).
+allowed-confusables = ["×", "–"]
+
 [tool.ruff.lint.per-file-ignores]
-# test_barcode_roundtrip.py calls pytest.importorskip() before its imports so
-# the module skips cleanly when optional barcode deps are absent; the imports
-# below it are intentionally not at the top of the file.
+# The barcode tests call pytest.importorskip() before their imports so
+# each module skips cleanly when optional barcode deps are absent; the imports
+# below those calls are intentionally not at the top of the file.
 "tests/test_barcode_roundtrip.py" = ["E402"]
+"tests/test_barcode_statement.py" = ["E402"]

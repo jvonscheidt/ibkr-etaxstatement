@@ -176,7 +176,15 @@ _MIN_FONT_SIZE = 5.0
 
 # Letters without a Unicode decomposition to fold before cp1252 encoding.
 _TRANSLITERATIONS = str.maketrans(
-    {"Ł": "L", "ł": "l", "Đ": "D", "đ": "d", "Ħ": "H", "ħ": "h", "ı": "i"}
+    {
+        "Ł": "L",
+        "ł": "l",
+        "Đ": "D",
+        "đ": "d",
+        "Ħ": "H",
+        "ħ": "h",
+        "ı": "i",  # noqa: RUF001 - dotless i is the letter being folded
+    }
 )
 
 
@@ -339,7 +347,9 @@ def _draw_statement_pages(
 
         for i, s in enumerate(chunk, start=first_pos):
             cells = [str(i), s["name"], s["isin"], s["ccy"], s["qty"], s["value"]]
-            for (_label, x_cm, right, width_cm), text in zip(_ST_COLS, cells):
+            for (_label, x_cm, right, width_cm), text in zip(
+                _ST_COLS, cells, strict=True
+            ):
                 _draw_cell(c, x_cm, y, text, regular, 8, right, width_cm)
             y -= 0.5 * cm
         first_pos += len(chunk)
