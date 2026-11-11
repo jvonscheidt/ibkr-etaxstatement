@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
       # documentation/ is git-ignored; without the XSD, validation tests skip.
       - name: Fetch eCH-0196 XSD
         run: python -c "import sys, convert; convert._download_xsd(); sys.exit(convert._find_xsd() is None)"

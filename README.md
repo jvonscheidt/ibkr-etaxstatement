@@ -204,8 +204,8 @@ ruff check .
 python -m pytest
 ```
 
-`requirements-dev.txt` pins the Black and Ruff versions CI uses; Dependabot
-bumps them weekly.
+`requirements-dev.txt` pins the Black, Ruff and pytest versions CI uses;
+Dependabot bumps them weekly.
 
 The suite covers parsing, FX→CHF conversion, eCH-0196 generation, an end-to-end
 XSD validation, and barcode round-trip/structure (the barcode tests self-skip if

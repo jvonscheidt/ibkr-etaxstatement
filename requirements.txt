@@ -11,6 +11,3 @@ python-barcode>=0.15
 # pypdf: post-processes the reportlab-generated PDF to set /Rotate on each
 # page without reportlab's setPageRotation() also swapping the MediaBox.
 pypdf>=4.0
-
-# Test suite
-pytest>=7.0
