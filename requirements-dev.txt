@@ -3,4 +3,4 @@
 # code change. Dependabot bumps them weekly.
 black==26.10.1
 pytest==9.2.0
-ruff==0.17.4
+ruff==0.17.5
